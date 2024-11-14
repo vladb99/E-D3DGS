@@ -28,6 +28,11 @@ conda activate ed3dgs
 
 # If submodules fail to be downloaded, refer to the repository of 3DGS  
 pip install -r requirements.txt
+
+conda install nvidia/label/cuda-11.8.0::cuda-nvcc
+conda install nvidia/label/cuda-11.8.0::cuda-cudart-dev
+conda env config vars set CUDA_HOME=$CONDA_PREFIX
+
 pip install -e submodules/diff-gaussian-rasterization/
 pip install -e submodules/simple-knn/ 
 ```
