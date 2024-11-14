@@ -24,7 +24,7 @@ import os
 import cv2 
 import glob 
 import tqdm 
-import numpy as np 
+import numpy as np
 import shutil
 import pickle
 
@@ -38,14 +38,8 @@ from PIL import Image
 
 sys.path.append(".")
 
-
-from scripts.thirdparty.pre_colmap import * 
-from scripts.thirdparty.helper3dg import getcolmapsingletechni
-
-
-
-
-    
+from script.thirdparty.pre_colmap import *
+from script.thirdparty.helper3dg import getcolmapsingletechni
 
 
 def convertmodel2dbfiles(path):
@@ -68,8 +62,6 @@ def convertmodel2dbfiles(path):
 
     db.create_tables()
 
-
-
     with open(os.path.join(path, "cameras_parameters.txt"), "r") as f:
             reader = csv.reader(f, delimiter=" ")
             for idx, row in enumerate(reader):
@@ -83,7 +75,7 @@ def convertmodel2dbfiles(path):
                 cx = row[1]  
                 cy = row[2]  
 
-                colmapQ = [row[5], row[6], row[7], row[8]] 
+                colmapQ = [row[5], row[6], row[7], row[8]]
                 colmapT = [row[9], row[10], row[11]]  
                 cameraname = "cam" + str(idx).zfill(2)
                 focolength = fx
@@ -120,7 +112,6 @@ def convertmodel2dbfiles(path):
                 print("commited one")
     db.close()
 
-
     with open(savetxt, "w") as f:
         for line in imagetxtlist :
             f.write(line)
@@ -129,16 +120,6 @@ def convertmodel2dbfiles(path):
             f.write(line)
     with open(savepoints, "w") as f:
         pass 
-
-
-
-
-
-
-
-
-
-
 
 
 def imagecopy(video, offsetlist=[0],focalscale=1.0, fixfocal=None):
@@ -174,7 +155,6 @@ def imagecopy(video, offsetlist=[0],focalscale=1.0, fixfocal=None):
             shutil.copy(pngpath, newpath)
 
 
-
 def checkimage(videopath):
     from PIL import Image
 
@@ -200,7 +180,7 @@ def fixbroken(imagepath, refimagepath):
     try:
         img = Image.open(imagepath) # open the image file
         print("start verifying", imagepath)
-        img.verify() # if we already fixed it. 
+        img.verify() # if we already fixed it.
         print("already fixed", imagepath)
     except :
         print('Bad file:', imagepath)
@@ -236,9 +216,6 @@ if __name__ == "__main__" :
     parser.add_argument("--videopath", default="", type=str)
     args = parser.parse_args()
 
-    
-
-
     videopath = args.videopath
 
     if not videopath.endswith("/"):
@@ -257,6 +234,3 @@ if __name__ == "__main__" :
     convertmodel2dbfiles(videopath)
 
     getcolmapsingletechni(videopath)
-
-
-
