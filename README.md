@@ -26,6 +26,8 @@ git submodule update --init --recursive
 conda create -n ed3dgs python=3.7 
 conda activate ed3dgs
 
+pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
+
 # If submodules fail to be downloaded, refer to the repository of 3DGS  
 pip install -r requirements.txt
 
@@ -34,10 +36,8 @@ conda install nvidia/label/cuda-11.8.0::cuda-cudart-dev
 conda env config vars set CUDA_HOME=$CONDA_PREFIX
 
 pip install -e submodules/diff-gaussian-rasterization/
-pip install -e submodules/simple-knn/ 
+pip install -e submodules/simple-knn/
 ```
-We use `pytorch=1.13.1+cu116` in our environment.
-
 
 ## Data Preparation
 
