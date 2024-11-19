@@ -34,7 +34,12 @@ from script.thirdparty.my_utils import posetow2c_matrcs, rotmat2qvec
 from script.thirdparty.pre_colmap import * 
 from script.thirdparty.helper3dg import getcolmapsinglen3d
 
-
+import pyvista as pv
+from dreifus.pyvista import add_coordinate_axes, add_camera_frustum
+from dreifus.matrix import Pose, Intrinsics
+from dreifus.camera import CameraCoordinateConvention, PoseType
+from PIL import Image
+from script.thirdparty.my_utils import qvec2rotmat
 
 
 def extractframes(videopath, endframe):
@@ -109,6 +114,7 @@ def convertdynerftocolmapdb(path):
     with open(originnumpy, 'rb') as numpy_file:
         poses_bounds = np.load(numpy_file)
         poses = poses_bounds[:, :15].reshape(-1, 3, 5)
+        params_dict = {}
 
         llffposes = poses.copy().transpose(1,2,0)
         w2c_matriclist = posetow2c_matrcs(llffposes)
@@ -129,7 +135,9 @@ def convertdynerftocolmapdb(path):
             imageid = str(i+1)
             cameraid = imageid
             pngname = cameraname + ".png"
-            
+
+            params_dict[pngname] = [colmapQ[0], colmapQ[1], colmapQ[2], colmapQ[3], T[0], T[1], T[2], focal, focal]
+
             line =  imageid + " "
 
             for j in range(4):
@@ -160,9 +168,45 @@ def convertdynerftocolmapdb(path):
         for line in cameratxtlist :
             f.write(line)
     with open(savepoints, "w") as f:
-        pass 
+        return params_dict
 
+def visualize_setup(videopath, params_dict):
+    """
+    videopath: path to the folder containing all videos
+    params_dict: dict of parameters for each image. The pose is world_2_camera: {png_name: [QW, QX, QY, QZ, TX, TY, TZ, fx, fy]}
+    """
+    path_images = os.path.join(videopath, "colmap", "input")
 
+    images = dict()
+    serials = []
+    world_2_cam_poses = dict()  # serial => world_2_cam_pose
+
+    fy = params_dict[list(params_dict.keys())[0]][7]
+    fx = params_dict[list(params_dict.keys())[0]][8]
+    intrinsics = Intrinsics(fx, fy, 0, 0)
+
+    for png_name, params in params_dict.items():
+        serial = png_name
+        serials.append(serial)
+
+        image = Image.open(os.path.join(path_images, png_name))
+        image = np.array(image)
+        images[serial] = image
+
+        world_2_cam_rotation = qvec2rotmat(params[:4])
+        world_2_cam_translation = np.array(params[4:7])
+
+        world_2_cam_pose = Pose(matrix_or_rotation=world_2_cam_rotation, translation=world_2_cam_translation,
+                                camera_coordinate_convention=CameraCoordinateConvention.OPEN_CV,
+                                pose_type=PoseType.WORLD_2_CAM)
+        world_2_cam_poses[serial] = world_2_cam_pose
+
+    # Visualize camera poses and images
+    p = pv.Plotter()
+    # add_coordinate_axes(p, scale=0.1)
+    for serial in serials:
+        add_camera_frustum(p, world_2_cam_poses[serial], intrinsics, image=images[serial])
+    p.show()
 
 
 
@@ -210,7 +254,9 @@ if __name__ == "__main__" :
 
     print("start preparing colmap database input")
     # # ## step 3 prepare colmap db file 
-    convertdynerftocolmapdb(videopath)
+    params_dict = convertdynerftocolmapdb(videopath)
+
+    visualize_setup(videopath, params_dict)
 
 
     # ## step 4 run colmap, per frame, if error, reinstall opencv-headless 
