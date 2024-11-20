@@ -12,3 +12,4 @@ pip install open3d
 conda install pytorch==1.12.1 -c pytorch -c conda-forge
 conda config --set channel_priority false
 conda install colmap -c conda-forge
+pip install 'scipy<1.13.0'
