@@ -48,6 +48,8 @@ class Scene:
 
         if loader == "dynerf":
             scene_info = sceneLoadTypeCallbacks["Dynerf"](args.source_path, args.source_path, args.eval, duration=duration)
+        elif loader == "nersemble":
+            scene_info = sceneLoadTypeCallbacks["Nersemble"](args.source_path, args.source_path, args.eval, duration=duration)
         elif loader == "technicolor" or loader == "technicolorvalid" :
             scene_info = sceneLoadTypeCallbacks["Technicolor"](args.source_path, args.images, args.eval, duration=50, testonly=testonly)
         elif loader == "nerfies":

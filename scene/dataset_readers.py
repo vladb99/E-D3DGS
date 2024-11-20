@@ -399,6 +399,7 @@ sceneLoadTypeCallbacks = {
     "Technicolor": readColmapSceneInfoTechnicolor,
     "Nerfies": readHyperDataInfos,
     "Dynerf": readColmapSceneInfoDynerf,
+    "Nersemble": readColmapSceneInfoDynerf
 }
 
 # modify the code in https://github.com/hustvl/4DGaussians/blob/master/scene/neural_3D_dataset_NDC.py
