@@ -338,7 +338,7 @@ def readColmapSceneInfoNersemble(path, images, eval, duration=110, testonly=None
     cam_infos_unsorted = readColmapCamerasDynerf(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
                                                  images_folder=path, near=near, far=far, duration=duration)
     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
-    video_cam_infos = buildTrajectory(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, near=near, far=far)
+    video_cam_infos = buildTrajectory(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, near=near, far=far, duration=duration)
     train_cam_infos = [_ for _ in cam_infos if "cam00" not in _.image_name]
     test_cam_infos = [_ for _ in cam_infos if "cam00" in _.image_name]
 
@@ -565,7 +565,7 @@ def getSpiralColmap(cam_extrinsics, cam_intrinsics, near, far):
     return cam_infos
 
 # similar to here https://github.com/tobias-kirschstein/nersemble/blob/master/scripts/render/render_nersemble.py#L62
-def buildTrajectory(cam_extrinsics, cam_intrinsics, near, far):
+def buildTrajectory(cam_extrinsics, cam_intrinsics, near, far, duration):
     c2ws_all = {}
     c2w_dreifus = {}
     for idx, key in enumerate(cam_extrinsics):
@@ -605,7 +605,8 @@ def buildTrajectory(cam_extrinsics, cam_intrinsics, near, far):
     central_point_c2w = np.mean(translations, axis=0)
     move = central_point_c2w
 
-    n_timesteps = 100
+    # TODO check FPS of dataset
+    n_timesteps = int(duration * 30)
     cam_2_world_poses = circle_around_axis(n_timesteps,
                                            axis=Vec3(central_point_c2w[0], central_point_c2w[1], central_point_c2w[2]),
                                            up=Vec3(0, -1, 0),
