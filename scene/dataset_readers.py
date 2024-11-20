@@ -602,17 +602,21 @@ def buildTrajectory(cam_extrinsics, cam_intrinsics, near, far, duration):
         assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
     translations = np.array([c2w.get_translation() for _, c2w in c2w_dreifus.items()])
-    central_point_c2w = np.mean(translations, axis=0)
-    move = central_point_c2w
+    central_point_world = np.mean(translations, axis=0)
+    move = central_point_world
+
+    cameras_z_directions_world = [c2w.get_rotation_matrix() @ np.array([0, 0, 1]) for _, c2w in c2w_dreifus.items()]
+    mean_z_direction_world = np.mean(cameras_z_directions_world, axis=0)
+    look_at = central_point_world + 1.1 * mean_z_direction_world
 
     # TODO check FPS of dataset
     n_timesteps = int(duration * 30)
     cam_2_world_poses = circle_around_axis(n_timesteps,
-                                           axis=Vec3(central_point_c2w[0], central_point_c2w[1], central_point_c2w[2]),
+                                           axis=Vec3(mean_z_direction_world[0], mean_z_direction_world[1], mean_z_direction_world[2]),
                                            up=Vec3(0, -1, 0),
                                            move=Vec3(move[0], move[1], move[2]),
-                                           look_at=Vec3(0, 0, 0),
-                                           distance=1)
+                                           look_at=look_at,
+                                           distance=0.5)
     cam_2_world_poses = [pose.change_camera_coordinate_convention(CameraCoordinateConvention.OPEN_CV, inplace=False) for
                          pose in cam_2_world_poses]
     cam_2_world_poses = np.stack(cam_2_world_poses)
@@ -638,6 +642,7 @@ def buildTrajectory(cam_extrinsics, cam_intrinsics, near, far, duration):
                                 pose_type=PoseType.WORLD_2_CAM))
     sys.stdout.write('\n')
 
+    """ Dreifus visualization
     intrinsics_dreifus = Intrinsics(intr.params[0], intr.params[1], 0, 0)
     # Visualize camera poses and images
     p = pv.Plotter()
@@ -647,6 +652,7 @@ def buildTrajectory(cam_extrinsics, cam_intrinsics, near, far, duration):
     for pose in trajectory_dreifus:
         add_camera_frustum(p, pose, intrinsics_dreifus, image=None)
     p.show()
+    """
 
     return cam_infos
 
