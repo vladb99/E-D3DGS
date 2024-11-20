@@ -42,18 +42,18 @@ from PIL import Image
 from script.thirdparty.my_utils import qvec2rotmat
 
 
-def extractframes(videopath):
+def extractframes(videopath, endframe):
     cam = cv2.VideoCapture(videopath)
     ctr = 0
     sucess = True
-    for i in range(300):
+    for i in range(endframe):
         if os.path.exists(os.path.join(videopath.replace(".mp4", ""), str(i) + ".png")):
             ctr += 1
     if ctr == 300 or ctr == 150: # 150 for 04_truck 
         print("already extracted all the frames, skip extracting")
         return
     ctr = 0
-    while ctr < 300:
+    while ctr < endframe:
         try:
             _, frame = cam.read()
             savepath = os.path.join(os.path.dirname(videopath), "images", os.path.basename(videopath)[:-4], str(ctr).zfill(4) + ".png")
@@ -245,22 +245,18 @@ if __name__ == "__main__" :
         print("start extracting 300 frames from videos")
         videoslist = sorted(glob.glob(videopath + "*.mp4"))
         for v in tqdm.tqdm(videoslist):
-            extractframes(v)
+            extractframes(v, endframe)
     
-    # # ## step2 prepare colmap input 
+    #### step2 prepare colmap input
     print("start preparing colmap image input")
     preparecolmapdynerf(videopath)
 
 
     print("start preparing colmap database input")
-    # # ## step 3 prepare colmap db file 
+    #### step 3 prepare colmap db file
     params_dict = convertdynerftocolmapdb(videopath)
 
     visualize_setup(videopath, params_dict)
 
-    # ## step 4 run colmap, per frame, if error, reinstall opencv-headless 
+    #### step 4 run colmap, per frame, if error, reinstall opencv-headless
     getcolmapsinglen3d(videopath)
-
-
-
-
