@@ -610,7 +610,7 @@ def buildTrajectory(cam_extrinsics, cam_intrinsics, near, far, duration):
     look_at = central_point_world + 1.1 * mean_z_direction_world
 
     # TODO check FPS of dataset
-    n_timesteps = int(duration * 30)
+    n_timesteps = int(duration)
     cam_2_world_poses = circle_around_axis(n_timesteps,
                                            axis=Vec3(mean_z_direction_world[0], mean_z_direction_world[1], mean_z_direction_world[2]),
                                            up=Vec3(0, -1, 0),
