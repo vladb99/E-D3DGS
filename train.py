@@ -30,6 +30,13 @@ from utils.extra_utils import o3d_knn, weighted_l2_loss_v2, image_sampler, calcu
 # import lpips
 from utils.scene_utils import render_training_image
 from time import time
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    TENSORBOARD_FOUND = True
+except ImportError:
+    TENSORBOARD_FOUND = False
+
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
@@ -230,7 +237,9 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
             # Log and save
             timer.pause()
- 
+
+            training_report(tb_writer, iteration, Ll1, loss, iter_start.elapsed_time(iter_end))
+
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -305,6 +314,14 @@ def prepare_output_and_logger(expname):
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
+    # Create Tensorboard writer
+    tb_writer = None
+    if TENSORBOARD_FOUND:
+        tb_writer = SummaryWriter(args.model_path)
+    else:
+        print("Tensorboard not available: not logging progress")
+    return tb_writer
+
 
         
 def setup_seed(seed):
@@ -313,8 +330,14 @@ def setup_seed(seed):
      np.random.seed(seed)
      random.seed(seed)
      torch.backends.cudnn.deterministic = True
-     
-     
+
+
+def training_report(tb_writer, iteration, Ll1, loss, elapsed):
+    if tb_writer:
+        tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
+        tb_writer.add_scalar('iter_time', elapsed, iteration)
+
 if __name__ == "__main__":
     # Set up command line argument parser
     # torch.set_default_tensor_type('torch.FloatTensor')
