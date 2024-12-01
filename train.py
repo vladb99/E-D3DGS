@@ -98,6 +98,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     # We sort training images to sample image of the desired camera number and frame.
     if dataset.loader not in ['nerfies']:
         train_cams = sorted(train_cams, key=lambda x: (x.cam_no, x.frame_no))
+        test_cams = sorted(test_cams, key=lambda x: (x.cam_no, x.frame_no))
 
     viewpoint_stack = train_cams
     method = None
@@ -238,7 +239,19 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             # Log and save
             timer.pause()
 
-            training_report(tb_writer, iteration, Ll1, loss, iter_start.elapsed_time(iter_end))
+            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end))
+
+            if (tb_writer and (iteration % 100 == 0)):
+                test_cam = np.random.choice(test_cams)
+                if type(test_cam.original_image) == type(None):
+                    test_cam.load_image()  # for lazy loading (to avoid OOM issue)
+                render_pkg = render(test_cam, gaussians, pipe, background,
+                                    cam_no=test_cam.cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings,
+                                    num_down_emb_f=hyper.min_embeddings)
+                test_image = render_pkg["render"].unsqueeze(0)
+                gt_image =  test_cam.original_image.cuda().unsqueeze(0)
+                test_psnr = psnr(test_image, gt_image).mean().double()
+                tb_writer.add_scalar('test/psnr', test_psnr, iteration)
 
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -332,10 +345,11 @@ def setup_seed(seed):
      torch.backends.cudnn.deterministic = True
 
 
-def training_report(tb_writer, iteration, Ll1, loss, elapsed):
+def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/psnr', psnr, iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
 
 if __name__ == "__main__":
