@@ -30,6 +30,13 @@ from utils.extra_utils import o3d_knn, weighted_l2_loss_v2, image_sampler, calcu
 # import lpips
 from utils.scene_utils import render_training_image
 from time import time
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    TENSORBOARD_FOUND = True
+except ImportError:
+    TENSORBOARD_FOUND = False
+
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
@@ -91,6 +98,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     # We sort training images to sample image of the desired camera number and frame.
     if dataset.loader not in ['nerfies']:
         train_cams = sorted(train_cams, key=lambda x: (x.cam_no, x.frame_no))
+        test_cams = sorted(test_cams, key=lambda x: (x.cam_no, x.frame_no))
 
     viewpoint_stack = train_cams
     method = None
@@ -230,7 +238,21 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
             # Log and save
             timer.pause()
- 
+
+            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end))
+
+            if (tb_writer and (iteration % 100 == 0)):
+                test_cam = np.random.choice(test_cams)
+                if type(test_cam.original_image) == type(None):
+                    test_cam.load_image()  # for lazy loading (to avoid OOM issue)
+                render_pkg = render(test_cam, gaussians, pipe, background,
+                                    cam_no=test_cam.cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings,
+                                    num_down_emb_f=hyper.min_embeddings)
+                test_image = render_pkg["render"].unsqueeze(0)
+                gt_image =  test_cam.original_image.cuda().unsqueeze(0)
+                test_psnr = psnr(test_image, gt_image).mean().double()
+                tb_writer.add_scalar('test/psnr', test_psnr, iteration)
+
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -305,6 +327,14 @@ def prepare_output_and_logger(expname):
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
+    # Create Tensorboard writer
+    tb_writer = None
+    if TENSORBOARD_FOUND:
+        tb_writer = SummaryWriter(args.model_path)
+    else:
+        print("Tensorboard not available: not logging progress")
+    return tb_writer
+
 
         
 def setup_seed(seed):
@@ -313,8 +343,15 @@ def setup_seed(seed):
      np.random.seed(seed)
      random.seed(seed)
      torch.backends.cudnn.deterministic = True
-     
-     
+
+
+def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed):
+    if tb_writer:
+        tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/psnr', psnr, iteration)
+        tb_writer.add_scalar('iter_time', elapsed, iteration)
+
 if __name__ == "__main__":
     # Set up command line argument parser
     # torch.set_default_tensor_type('torch.FloatTensor')
@@ -330,7 +367,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[i*500 for i in range(0,120)])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 60000, 80000, 100000, 120000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 60000, 80000, 100000, 120000, 500000,1_100_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
