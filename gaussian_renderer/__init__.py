@@ -4,8 +4,8 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from time import time as get_time
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, cam_no=None, iter=None, train_coarse=False, \
-    num_down_emb_c=5, num_down_emb_f=5):
+
+def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, kernel_size, scaling_modifier=1.0, require_coord: bool = True, require_depth: bool = True, override_color = None, cam_no=None, iter=None, train_coarse=False, num_down_emb_c=5, num_down_emb_f=5):
     """
     Render the scene. 
     
@@ -38,6 +38,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         campos=viewpoint_camera.camera_center.cuda(),
         prefiltered=False,
         debug=pipe.debug,
+        kernel_size=kernel_size,
+        require_coord=require_coord,
+        require_depth=True,
     )
     time = torch.tensor(viewpoint_camera.time).to(means3D.device).repeat(means3D.shape[0],1)
   
@@ -99,23 +102,33 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         scales = scales_final,
         rotations = rotations_final,
         cov3D_precomp = cov3D_precomp)
-    if len(outputs) == 2:
-        rendered_image, radii = outputs
-    elif len(outputs) == 3:
-        rendered_image, radii, depth = outputs
+    if len(outputs) == 8:
+        rendered_image, radii, rendered_expected_coord, rendered_median_coord, rendered_expected_depth, rendered_median_depth, rendered_alpha, rendered_normal = outputs
     else:
-        assert False, "only (depth-)diff-gaussian-rasterization supported!"
+        assert False, "only (depth-)diff-gaussian-rasterization from RaDe-GS supported!"
     # time4 = get_time()
     # print("rasterization:",time4-time3)
     # breakpoint()
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
 
+    # Debug rendered_image
+    import matplotlib.pyplot as plt
+    image_tensor = rendered_image.permute(1, 2, 0).cpu().detach().numpy()
+    plt.imshow(image_tensor)
+    plt.axis('off')
+    plt.show()
 
     return {"render": rendered_image,
-            "viewspace_points": screenspace_points,
-            "visibility_filter" : radii > 0,
+            "mask": rendered_alpha,
+            "expected_coord": rendered_expected_coord,
+            "median_coord": rendered_median_coord,
+            "expected_depth": rendered_expected_depth,
+            "median_depth": rendered_median_depth,
+            "viewspace_points": means2D,
+            "visibility_filter": radii > 0,
             "radii": radii,
-            "depth":depth,
+            "normal": rendered_normal,
             "sh_coefs_final": shs_final,
-            "extras":extras,}
+            "extras": extras,
+    }
