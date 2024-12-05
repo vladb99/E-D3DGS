@@ -40,7 +40,7 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
         debug=pipe.debug,
         kernel_size=kernel_size,
         require_coord=require_coord,
-        require_depth=True,
+        require_depth=require_depth,
     )
     time = torch.tensor(viewpoint_camera.time).to(means3D.device).repeat(means3D.shape[0],1)
   
