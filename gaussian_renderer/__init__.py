@@ -113,11 +113,11 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
     # They will be excluded from value updates used in the splitting criteria.
 
     # Debug rendered_image
-    import matplotlib.pyplot as plt
-    image_tensor = rendered_image.permute(1, 2, 0).cpu().detach().numpy()
-    plt.imshow(image_tensor)
-    plt.axis('off')
-    plt.show()
+    # import matplotlib.pyplot as plt
+    # image_tensor = rendered_image.permute(1, 2, 0).cpu().detach().numpy()
+    # plt.imshow(image_tensor)
+    # plt.axis('off')
+    # plt.show()
 
     return {"render": rendered_image,
             "mask": rendered_alpha,
