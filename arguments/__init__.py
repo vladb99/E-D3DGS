@@ -57,6 +57,10 @@ class ModelParams(ParamGroup):
         self.render_process=False
         self.loader = "colmap"
         self.shuffle = True
+        # From RaDe-GS
+        self.use_coord_map = False
+        self.kernel_size = 0.0  # Size of 2D filter in mip-splatting
+        self.disable_filter3D = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -148,7 +152,14 @@ class OptimizationParams(ParamGroup):
         self.num_multiview_ssim = 0
         self.offsets_lr = 0.00002
         self.reg_coef = 1.0
-        
+
+        # From RaDe-GS
+        self.radegs_regularization_from_iter = 15_000
+        self.lambda_depth_normal = 0.05
+        self.appearance_embeddings_lr = 0.001
+        self.appearance_network_lr = 0.001
+        ###
+
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

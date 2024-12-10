@@ -30,6 +30,7 @@ from utils.extra_utils import o3d_knn, weighted_l2_loss_v2, image_sampler, calcu
 # import lpips
 from utils.scene_utils import render_training_image
 from time import time
+from utils.graphics_utils import depth_double_to_normal, point_double_to_normal
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -103,6 +104,18 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     viewpoint_stack = train_cams
     method = None
 
+    # ### RaDe-GS
+    # TODO implement 3D filter from RaDe-GS
+    # if dataset.disable_filter3D:
+    #     gaussians.reset_3D_filter()
+    # else:
+    #     gaussians.compute_3D_filter(cameras=train_cams)
+    #
+    require_depth = not dataset.use_coord_map
+    require_coord = dataset.use_coord_map
+    kernel_size = dataset.kernel_size
+    # ###
+
     start_time = time()
     for iteration in range(first_iter, final_iter+1):             
         iter_start.record()
@@ -145,6 +158,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         visibility_filter_list = []
         viewspace_point_tensor_list = []
         cam_no_list, frame_no_list = [], []
+        reg_kick_on = iteration >= opt.radegs_regularization_from_iter
         for viewpoint_cam in viewpoint_cams:
             if type(viewpoint_cam.original_image) == type(None):
                 viewpoint_cam.load_image()  # for lazy loading (to avoid OOM issue)
@@ -152,8 +166,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             frame_no = viewpoint_cam.frame_no
             cam_no_list.append(cam_no)
             frame_no_list.append(frame_no)
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, cam_no=cam_no, iter=iteration, \
-                num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size, require_coord=require_coord and reg_kick_on, require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings)
+
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
             images.append(image.unsqueeze(0))
@@ -207,6 +221,33 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             second_difference = first_difference[1:,:] - first_difference[N-2,:]
             loss += opt.coef_tv_temporal_embedding * torch.square(second_difference).mean()
 
+        # TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
+        ### Depth normal loss from RaDe-GS
+        if opt.radegs_regularization_from_iter:
+            lambda_depth_normal = opt.lambda_depth_normal
+            if require_depth:
+                rendered_expected_depth: torch.Tensor = render_pkg["expected_depth"]
+                rendered_median_depth: torch.Tensor = render_pkg["median_depth"]
+                rendered_normal: torch.Tensor = render_pkg["normal"]
+                depth_middepth_normal = depth_double_to_normal(viewpoint_cam, rendered_expected_depth,
+                                                               rendered_median_depth)
+            else:
+                rendered_expected_coord: torch.Tensor = render_pkg["expected_coord"]
+                rendered_median_coord: torch.Tensor = render_pkg["median_coord"]
+                rendered_normal: torch.Tensor = render_pkg["normal"]
+                depth_middepth_normal = point_double_to_normal(viewpoint_cam, rendered_expected_coord,
+                                                               rendered_median_coord)
+            depth_ratio = 0.6
+            normal_error_map = (1 - (rendered_normal.unsqueeze(0) * depth_middepth_normal).sum(dim=1))
+            depth_normal_loss = (1 - depth_ratio) * normal_error_map[0].mean() + depth_ratio * normal_error_map[
+                1].mean()
+        else:
+            lambda_depth_normal = 0
+            depth_normal_loss = torch.tensor([0], dtype=torch.float32, device="cuda")
+
+        loss += depth_normal_loss * lambda_depth_normal
+        ###
+
         
         loss.backward()
         viewspace_point_tensor_grad = torch.zeros_like(viewspace_point_tensor)
@@ -245,9 +286,10 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 test_cam = np.random.choice(test_cams)
                 if type(test_cam.original_image) == type(None):
                     test_cam.load_image()  # for lazy loading (to avoid OOM issue)
-                render_pkg = render(test_cam, gaussians, pipe, background,
-                                    cam_no=test_cam.cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings,
-                                    num_down_emb_f=hyper.min_embeddings)
+                render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size,
+                                    require_coord=require_coord and reg_kick_on,
+                                    require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration,
+                                    num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings)
                 test_image = render_pkg["render"].unsqueeze(0)
                 gt_image =  test_cam.original_image.cuda().unsqueeze(0)
                 test_psnr = psnr(test_image, gt_image).mean().double()
@@ -283,8 +325,22 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
                     gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
 
+                    # # From RaDe-GS
+                    # if dataset.disable_filter3D:
+                    #     gaussians.reset_3D_filter()
+                    # else:
+                    #     gaussians.compute_3D_filter(cameras=train_cams)
+                    # ###
+
                     if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
                         gaussians.reset_opacity(opt.reset_opacity_ratio)
+
+            # ### From RaDe-GS
+            # if iteration % 100 == 0 and iteration > opt.densify_until_iter and not dataset.disable_filter3D:
+            #     if iteration < opt.iterations - 100:
+            #         # don't update in the end of training
+            #         gaussians.compute_3D_filter(cameras=train_cams)
+            # ###
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -367,7 +423,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[i*500 for i in range(0,120)])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 60000, 80000, 100000, 120000, 500000,1_100_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 55000, 60000, 80000, 100000, 120000, 500000,1_100_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)

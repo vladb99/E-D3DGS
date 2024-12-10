@@ -13,4 +13,6 @@ OptimizationParams = dict(
     densify_until_iter = 55_000,
     position_lr_max_steps = 55_000,
     deformation_lr_max_steps = 55_000,
+
+    radegs_regularization_from_iter = 15_000
 )
