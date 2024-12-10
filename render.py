@@ -27,7 +27,7 @@ from time import time
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, hyperparam=None):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, hyperparam=None, disable_filter3D=True, ):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
@@ -51,7 +51,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 view.load_image()
         time1 = time()
-        rendering = render(view, gaussians, pipeline, background, iter=iteration, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f)["render"]
+        rendering = render(view, gaussians, pipeline, background, kernel_size=0, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)["render"]
         time2 = time()
         total_time += (time2 - time1)
         render_images.append(to8b(rendering).transpose(1,2,0))
@@ -91,11 +91,11 @@ def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipelin
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, hyperparam=hyperparam)
+            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
         if not skip_test:
-            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, hyperparam=hyperparam)
+            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
         if not skip_video:
-            render_set(dataset.model_path, "video", scene.loaded_iter, scene.getVideoCameras(), gaussians, pipeline, background, hyperparam=hyperparam)
+            render_set(dataset.model_path, "video", scene.loaded_iter, scene.getVideoCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
 
 
 if __name__ == "__main__":
