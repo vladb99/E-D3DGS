@@ -104,13 +104,12 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     viewpoint_stack = train_cams
     method = None
 
-    # ### RaDe-GS
-    # TODO implement 3D filter from RaDe-GS
-    # if dataset.disable_filter3D:
-    #     gaussians.reset_3D_filter()
-    # else:
-    #     gaussians.compute_3D_filter(cameras=train_cams)
-    #
+    ### RaDe-GS
+    if dataset.disable_filter3D:
+        gaussians.reset_3D_filter()
+    else:
+        gaussians.compute_3D_filter(cameras=train_cams)
+
     require_depth = not dataset.use_coord_map
     require_coord = dataset.use_coord_map
     kernel_size = dataset.kernel_size
@@ -166,7 +165,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             frame_no = viewpoint_cam.frame_no
             cam_no_list.append(cam_no)
             frame_no_list.append(frame_no)
-            render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size, require_coord=require_coord and reg_kick_on, require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size, require_coord=require_coord and reg_kick_on, require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings, disable_filter3D=dataset.disable_filter3D)
 
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
@@ -289,7 +288,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size,
                                     require_coord=require_coord and reg_kick_on,
                                     require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration,
-                                    num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings)
+                                    num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings, disable_filter3D=dataset.disable_filter3D)
                 test_image = render_pkg["render"].unsqueeze(0)
                 gt_image =  test_cam.original_image.cuda().unsqueeze(0)
                 test_psnr = psnr(test_image, gt_image).mean().double()
@@ -326,21 +325,21 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                     gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
 
                     # # From RaDe-GS
-                    # if dataset.disable_filter3D:
-                    #     gaussians.reset_3D_filter()
-                    # else:
-                    #     gaussians.compute_3D_filter(cameras=train_cams)
+                    if dataset.disable_filter3D:
+                        gaussians.reset_3D_filter()
+                    else:
+                        gaussians.compute_3D_filter(cameras=train_cams)
                     # ###
 
                     if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
                         gaussians.reset_opacity(opt.reset_opacity_ratio)
 
             # ### From RaDe-GS
-            # if iteration % 100 == 0 and iteration > opt.densify_until_iter and not dataset.disable_filter3D:
-            #     if iteration < opt.iterations - 100:
-            #         # don't update in the end of training
-            #         gaussians.compute_3D_filter(cameras=train_cams)
-            # ###
+            if iteration % 100 == 0 and iteration > opt.densify_until_iter and not dataset.disable_filter3D:
+                if iteration < opt.iterations - 100:
+                    # don't update in the end of training
+                    gaussians.compute_3D_filter(cameras=train_cams)
+            ###
 
             # Optimizer step
             if iteration < opt.iterations:

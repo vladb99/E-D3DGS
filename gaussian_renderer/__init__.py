@@ -5,7 +5,7 @@ from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from time import time as get_time
 
-def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, kernel_size, scaling_modifier=1.0, require_coord: bool = True, require_depth: bool = True, override_color = None, cam_no=None, iter=None, train_coarse=False, num_down_emb_c=5, num_down_emb_f=5):
+def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, kernel_size, scaling_modifier=1.0, require_coord: bool = True, require_depth: bool = True, override_color = None, cam_no=None, iter=None, train_coarse=False, num_down_emb_c=5, num_down_emb_f=5, disable_filter3D=True):
     """
     Render the scene. 
     
@@ -74,9 +74,13 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
     means3D_final, scales_final, rotations_final, opacity_final, shs_final, extras = pc._deformation(means3D, scales, 
         rotations, opacity, time, cam_no, pc, None, shs, iter=iter, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f)
 
-    scales_final = pc.scaling_activation(scales_final)
     rotations_final = pc.rotation_activation(rotations_final)
-    opacity = pc.opacity_activation(opacity_final)
+
+    if disable_filter3D:
+        scales_final = pc.scaling_activation(scales_final)
+        opacity = pc.opacity_activation(opacity_final)
+    else:
+        scales_final, opacity = pc.apply_scaling_n_opacity_with_3D_filter(opacity=opacity_final, scales=scales_final)
     colors_precomp = None
     if override_color is None:
         if pipe.convert_SHs_python:
@@ -114,11 +118,11 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
 
     # Debug rendered_image
     # if require_depth:
-    #     import matplotlib.pyplot as plt
-    #     image_tensor = rendered_normal.permute(1, 2, 0).cpu().detach().numpy()
-    #     plt.imshow(image_tensor)
-    #     plt.axis('off')
-    #     plt.show()
+    # import matplotlib.pyplot as plt
+    # image_tensor = rendered_image.permute(1, 2, 0).cpu().detach().numpy()
+    # plt.imshow(image_tensor)
+    # plt.axis('off')
+    # plt.show()
 
     return {"render": rendered_image,
             "mask": rendered_alpha,
