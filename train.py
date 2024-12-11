@@ -113,7 +113,13 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     require_depth = not dataset.use_coord_map
     require_coord = dataset.use_coord_map
     kernel_size = dataset.kernel_size
-    # ###
+    ###
+
+    # Sequential frame sampling:
+    if dataset.sequential_frame_sampling:
+        FRAME_CHANGING_AFTER = final_iter // scene.maxtime
+        current_frame = 0
+        print("Starting with frame {}".format(current_frame))
 
     start_time = time()
     for iteration in range(first_iter, final_iter+1):             
@@ -131,6 +137,14 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             frame_set = np.random.choice(range(math.ceil(len(viewpoint_stack) / 2)), size=max(opt.batch_size // 2, 1))
             viewpoint_cams = [viewpoint_stack[(f*2) % scene.maxtime] for f in frame_set] + \
                              [viewpoint_stack[(f*2+1) % scene.maxtime] for f in frame_set]
+        elif dataset.sequential_frame_sampling:
+            sampled_cam_no = np.random.choice(range(len(viewpoint_stack) // scene.maxtime), size=opt.batch_size)
+            sampled_frame_no = np.full_like(sampled_cam_no, current_frame)
+            viewpoint_cams = [viewpoint_stack[c * scene.maxtime + f] for c, f in zip(sampled_cam_no, sampled_frame_no)]
+            if iteration % FRAME_CHANGING_AFTER == 0:
+                # After FRAME_CHANGING_AFTER iterations have passed, go to next frame
+                current_frame += 1
+                print("Continuing next iteration with frame {}".format(current_frame))
         else:
             # Pick camera
             method = "random" if iteration < opt.random_until or iteration % 2 == 1 else "by_error"
