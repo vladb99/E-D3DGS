@@ -33,6 +33,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
+    makedirs(nomal_map_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     render_images = []
     normal_images = []
