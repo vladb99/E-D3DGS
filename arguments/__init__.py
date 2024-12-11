@@ -58,6 +58,7 @@ class ModelParams(ParamGroup):
         self.loader = "colmap"
         self.shuffle = True
         self.sequential_frame_sampling = False
+        self.sequential_from_iter = 11_000
         # From RaDe-GS
         self.use_coord_map = False
         self.kernel_size = 0.0  # Size of 2D filter in mip-splatting

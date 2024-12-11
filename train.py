@@ -117,7 +117,17 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
     # Sequential frame sampling:
     if dataset.sequential_frame_sampling:
-        FRAME_CHANGING_AFTER = final_iter // scene.maxtime
+        print_remainder_iterations_flag = True
+        remainder_iterations_left = False
+        if dataset.sequential_from_iter > 0:
+            # If we don't sequentially sample the frames from the beginning and want to train longer on the first frame, we must subtract 1 frame from the total number of frames
+            FRAME_CHANGING_AFTER = (final_iter - dataset.sequential_from_iter) // (scene.maxtime - 1)
+            if (final_iter - dataset.sequential_from_iter) % (scene.maxtime - 1) != 0:
+                remainder_iterations_left = True
+        else:
+            FRAME_CHANGING_AFTER = final_iter // scene.maxtime
+            if final_iter % (scene.maxtime) != 0:
+                remainder_iterations_left = True
         current_frame = 0
         print("Starting with frame {}".format(current_frame))
 
@@ -137,11 +147,18 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             frame_set = np.random.choice(range(math.ceil(len(viewpoint_stack) / 2)), size=max(opt.batch_size // 2, 1))
             viewpoint_cams = [viewpoint_stack[(f*2) % scene.maxtime] for f in frame_set] + \
                              [viewpoint_stack[(f*2+1) % scene.maxtime] for f in frame_set]
-        elif dataset.sequential_frame_sampling:
+        # TODO move this logic to separate method, that just returns frame number from iteration and configuration given
+        elif dataset.sequential_frame_sampling and iteration > dataset.sequential_from_iter:
+            # Sequential frame sampling activated and current iteration has surpassed the initial time allocated for the training of the first time frame
             sampled_cam_no = np.random.choice(range(len(viewpoint_stack) // scene.maxtime), size=opt.batch_size)
             sampled_frame_no = np.full_like(sampled_cam_no, current_frame)
             viewpoint_cams = [viewpoint_stack[c * scene.maxtime + f] for c, f in zip(sampled_cam_no, sampled_frame_no)]
-            if iteration % FRAME_CHANGING_AFTER == 0:
+            if remainder_iterations_left and current_frame == scene.maxtime - 1:
+                # If we are on the last frame and the number of iterations is not exactly divisible by the number of frames, we want to train the last frame for the remainder of iterations
+                if print_remainder_iterations_flag:
+                    print("Staying on frame {} and training for another {} iterations".format(current_frame, final_iter - iteration))
+                    print_remainder_iterations_flag = False
+            elif iteration % FRAME_CHANGING_AFTER == 0:
                 # After FRAME_CHANGING_AFTER iterations have passed, go to next frame
                 current_frame += 1
                 print("Continuing next iteration with frame {}".format(current_frame))
@@ -414,9 +431,10 @@ def setup_seed(seed):
      torch.backends.cudnn.deterministic = True
 
 
-def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed):
+def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/normal_loss', normal_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/psnr', psnr, iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
