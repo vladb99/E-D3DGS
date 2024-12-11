@@ -310,7 +310,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             # Log and save
             timer.pause()
 
-            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end))
+            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss)
 
             if (tb_writer and (iteration % 100 == 0)):
                 test_cam = np.random.choice(test_cams)
