@@ -29,11 +29,13 @@ to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, hyperparam=None, disable_filter3D=True, ):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    nomal_map_path = os.path.join(model_path, name, "ours_{}".format(iteration), "normal_map")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     render_images = []
+    normal_images = []
     gt_list = []
     render_list = []
     deform_vertices = []
@@ -51,11 +53,15 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 view.load_image()
         time1 = time()
-        rendering = render(view, gaussians, pipeline, background, kernel_size=0, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)["render"]
+        render_pkg = render(view, gaussians, pipeline, background, kernel_size=0, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+        rendering = render_pkg["render"]
+        nomal_map = render_pkg["normal"]
         time2 = time()
         total_time += (time2 - time1)
         render_images.append(to8b(rendering).transpose(1,2,0))
+        normal_images.append(to8b(nomal_map).transpose(1,2,0))
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(count) + ".png"))
+        torchvision.utils.save_image(nomal_map, os.path.join(nomal_map_path, '{0:05d}'.format(count) + ".png"))
         # render_list.append(rendering)
     
         if name in ["train", "test"]:
@@ -80,6 +86,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     #         count +=1
     
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'normal_map.mp4'), normal_images, fps=30, quality=8)
 
 
 def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, skip_video: bool):
