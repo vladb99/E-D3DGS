@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -41,7 +41,7 @@ except ImportError:
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
-def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations, 
+def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                          checkpoint_iterations, checkpoint, debug_from,
                          gaussians, scene, tb_writer, train_iter,timer, start_time):
     first_iter = 0
@@ -61,7 +61,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     ema_psnr_for_log = 0.0
 
     final_iter = train_iter
-    
+
     progress_bar = tqdm(range(first_iter, final_iter), desc="Training progress")
     first_iter += 1
 
@@ -72,7 +72,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     num_traincams = 1
     if dataset.loader != 'nerfies': # for multi-view setting
         num_traincams = int(len(train_cams) / scene.maxtime)
-    
+
         camera_centers = []
         for i in range(num_traincams):
             camera_centers.append(train_cams[i*scene.maxtime].camera_center.cpu().numpy())
@@ -82,7 +82,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         min_dist = sorted_dists[int(sorted_dists.shape[0] * 0.5)]
 
         last_camera_index = 0
-    
+
     cam_no_list = list(set(c.cam_no for c in train_cams))
     print("train cameras:", cam_no_list)
     if dataset.loader in ['nerfies']:  # single-view
@@ -122,7 +122,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         print("Starting with frame {}".format(current_frame))
 
     start_time = time()
-    for iteration in range(first_iter, final_iter+1):             
+    for iteration in range(first_iter, final_iter+1):
         iter_start.record()
 
         gaussians.update_learning_rate(iteration)
@@ -153,7 +153,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             for _ in range(opt.batch_size):
                 last_camera_index = sample_camera(cam_dists, last_camera_index, min_dist)
                 cam_no.append(last_camera_index)
-            
+
             viewpoint_cams, sampled_cam_no, sampled_frame_no = image_sampler(method=method, loader=viewpoint_stack, loss_list=loss_list, batch_size=opt.batch_size, \
                 cam_no=cam_no, frame_no=sampled_frame_no, total_num_frames=scene.maxtime)
             if iteration >= opt.random_until and opt.num_multiview_ssim > 0 and iteration % 50 < opt.num_multiview_ssim:
@@ -161,7 +161,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             else:
                 sampled_frame_no = None
         ###
-        
+
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
@@ -189,13 +189,13 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             radii_list.append(radii.unsqueeze(0))
             visibility_filter_list.append(visibility_filter.unsqueeze(0))
             viewspace_point_tensor_list.append(viewspace_point_tensor)
-        
+
         radii = torch.cat(radii_list,0).max(dim=0).values
         visibility_filter = torch.cat(visibility_filter_list).any(dim=0)
         image_tensor = torch.cat(images,0)
         gt_image_tensor = torch.cat(gt_images,0)
 
-        
+
         Ll1 = l1_loss(image_tensor, gt_image_tensor, keepdim=True)
         Ll1_items = Ll1.detach()
         Ll1 = Ll1.mean()
@@ -221,7 +221,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             neighbor_indices = torch.tensor(neighbor_indices).cuda().long().contiguous()
             neighbor_weight = torch.tensor(neighbor_weight).cuda().float().contiguous()
             prev_num_pts = gaussians._xyz.shape[0]
-        
+
         emb = gaussians._embedding[:,None,:].repeat(1,20,1)
         emb_knn = gaussians._embedding[neighbor_indices]
         loss += opt.reg_coef * weighted_l2_loss_v2(emb, emb_knn, neighbor_weight)
@@ -234,7 +234,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             second_difference = first_difference[1:,:] - first_difference[N-2,:]
             loss += opt.coef_tv_temporal_embedding * torch.square(second_difference).mean()
 
-        # TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
+# TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
         ### Depth normal loss from RaDe-GS
         if opt.radegs_regularization_from_iter:
             lambda_depth_normal = opt.lambda_depth_normal
@@ -261,7 +261,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         loss += depth_normal_loss * lambda_depth_normal
         ###
 
-        
+
         loss.backward()
         viewspace_point_tensor_grad = torch.zeros_like(viewspace_point_tensor)
         for idx in range(0, len(viewspace_point_tensor_list)):
@@ -270,7 +270,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
         if iteration in saving_iterations:
             elapsed_time = time()
-            
+
             total_time_seconds = elapsed_time - start_time
             hours, remainder = divmod(total_time_seconds, 3600)
             minutes, seconds = divmod(remainder, 60)
@@ -325,13 +325,13 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor_grad, visibility_filter)
-  
-                opacity_threshold = opt.opacity_threshold_fine_init - iteration*(opt.opacity_threshold_fine_init - opt.opacity_threshold_fine_after)/(opt.densify_until_iter)  
-                densify_threshold = opt.densify_grad_threshold_fine_init - iteration*(opt.densify_grad_threshold_fine_init - opt.densify_grad_threshold_after)/(opt.densify_until_iter )  
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 :
+                opacity_threshold = opt.opacity_threshold_fine_init - iteration*(opt.opacity_threshold_fine_init - opt.opacity_threshold_fine_after)/(opt.densify_until_iter)
+                densify_threshold = opt.densify_grad_threshold_fine_init - iteration*(opt.densify_grad_threshold_fine_init - opt.densify_grad_threshold_after)/(opt.densify_until_iter )
+
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and gaussians._xyz.shape[0] < 200_000 :
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    
+
                     gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
                 if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
@@ -372,20 +372,20 @@ def training(dataset, hyper, opt, pipe, testing_iterations, saving_iterations, c
     timer = Timer()
     scene = Scene(dataset, gaussians, shuffle=dataset.shuffle, loader=dataset.loader, duration=hyper.total_num_frames, opt=opt)
     timer.start()
-    
+
     start_time = time()
     scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_iterations,
                          checkpoint_iterations, checkpoint, debug_from,
                          gaussians, scene, tb_writer, opt.iterations, timer, start_time)
     end_time = time()
-    
+
     total_time_seconds = end_time - start_time
     hours, remainder = divmod(total_time_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     print(f"training time: {int(hours)}h {int(minutes)}m {seconds}sec")
 
 
-def prepare_output_and_logger(expname):    
+def prepare_output_and_logger(expname):
     if not args.model_path:
         unique_str = expname
 
@@ -405,7 +405,7 @@ def prepare_output_and_logger(expname):
     return tb_writer
 
 
-        
+
 def setup_seed(seed):
      torch.manual_seed(seed)
      torch.cuda.manual_seed_all(seed)
@@ -436,13 +436,13 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[i*500 for i in range(0,120)])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 55000, 60000, 80000, 100000, 120000, 500000,1_100_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 55000, 60000, 80000, 100000, 120000, 500000, 1100000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--expname", type=str, default = "")
     parser.add_argument("--configs", type=str, default = "")
-    
+
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     if args.configs:
