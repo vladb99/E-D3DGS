@@ -346,7 +346,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 opacity_threshold = opt.opacity_threshold_fine_init - iteration*(opt.opacity_threshold_fine_init - opt.opacity_threshold_fine_after)/(opt.densify_until_iter)
                 densify_threshold = opt.densify_grad_threshold_fine_init - iteration*(opt.densify_grad_threshold_fine_init - opt.densify_grad_threshold_after)/(opt.densify_until_iter )
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and gaussians._xyz.shape[0] < 200_000 :
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
 
                     gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
