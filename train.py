@@ -163,7 +163,6 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 current_frame += 1
                 print("Continuing next iteration with frame {}".format(current_frame))
         else:
-            print("Test????????")
             # Pick camera
             method = "random" if iteration < opt.random_until or iteration % 2 == 1 else "by_error"
 
