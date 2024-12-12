@@ -163,6 +163,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 current_frame += 1
                 print("Continuing next iteration with frame {}".format(current_frame))
         else:
+            print("Test????????")
             # Pick camera
             method = "random" if iteration < opt.random_until or iteration % 2 == 1 else "by_error"
 
@@ -221,6 +222,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             Lssim = (1 - ssim_value) / 2
             loss = Ll1 + opt.lambda_dssim * Lssim
         else:
+            print("Why???????")
+            print(sampled_frame_no)
             loss = Ll1
 
         psnr_ = psnr(image_tensor, gt_image_tensor).mean().double()
@@ -229,7 +232,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
         # use l1 instead of opacity reset
         if opt.opacity_l1_coef_fine > 0.:
-            loss += opt.opacity_l1_coef_fine * torch.sigmoid(gaussians._opacity.mean())
+            opacity_mean_loss = torch.sigmoid(gaussians._opacity.mean())
+            loss += opt.opacity_l1_coef_fine * opacity_mean_loss
 
         # embedding reg using knn (https://github.com/JonathonLuiten/Dynamic3DGaussians)
         if prev_num_pts != gaussians._xyz.shape[0]:
@@ -241,7 +245,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
         emb = gaussians._embedding[:,None,:].repeat(1,20,1)
         emb_knn = gaussians._embedding[neighbor_indices]
-        loss += opt.reg_coef * weighted_l2_loss_v2(emb, emb_knn, neighbor_weight)
+        embedding_loss = weighted_l2_loss_v2(emb, emb_knn, neighbor_weight)
+        loss += opt.reg_coef * embedding_loss
 
         # smoothness reg on temporal embeddings
         if opt.coef_tv_temporal_embedding > 0:
@@ -249,7 +254,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             N, C = weights.shape
             first_difference = weights[1:,:] - weights[N-1,:]
             second_difference = first_difference[1:,:] - first_difference[N-2,:]
-            loss += opt.coef_tv_temporal_embedding * torch.square(second_difference).mean()
+            temporal_loss = torch.square(second_difference).mean()
+            loss += opt.coef_tv_temporal_embedding * temporal_loss
 
 # TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
         ### Depth normal loss from RaDe-GS
@@ -310,7 +316,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             # Log and save
             timer.pause()
 
-            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss)
+            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss, total_point, Lssim, temporal_loss, embedding_loss, opacity_mean_loss)
 
             if (tb_writer and (iteration % 100 == 0)):
                 test_cam = np.random.choice(test_cams)
@@ -431,13 +437,18 @@ def setup_seed(seed):
      torch.backends.cudnn.deterministic = True
 
 
-def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss):
+def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss, total_points, dssim_loss, temporal_loss, embedding_loss, opacity_mean_loss):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/normal_loss', normal_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/dssim_loss', dssim_loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/temporal_loss', temporal_loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/embedding_loss', embedding_loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/opacity_mean_loss', opacity_mean_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/psnr', psnr, iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
+        tb_writer.add_scalar('total_points', total_points, iteration)
 
 if __name__ == "__main__":
     # Set up command line argument parser
