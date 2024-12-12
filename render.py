@@ -29,14 +29,14 @@ to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, hyperparam=None, disable_filter3D=True, ):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    nomal_map_path = os.path.join(model_path, name, "ours_{}".format(iteration), "normal_map")
+    shading_path = os.path.join(model_path, name, "ours_{}".format(iteration), "shading")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
-    makedirs(nomal_map_path, exist_ok=True)
+    makedirs(shading_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     render_images = []
-    normal_images = []
+    shading_images = []
     gt_list = []
     render_list = []
     deform_vertices = []
@@ -56,13 +56,16 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         time1 = time()
         render_pkg = render(view, gaussians, pipeline, background, kernel_size=0, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
         rendering = render_pkg["render"]
-        nomal_map = render_pkg["normal"]
+        normal_map = render_pkg["normal"]
         time2 = time()
         total_time += (time2 - time1)
         render_images.append(to8b(rendering).transpose(1,2,0))
-        normal_images.append(to8b(nomal_map).transpose(1,2,0))
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(count) + ".png"))
-        torchvision.utils.save_image(nomal_map, os.path.join(nomal_map_path, '{0:05d}'.format(count) + ".png"))
+
+        shading_image = phong_reflection(normal_map, cam2world = view.world_view_transform.T.inverse())
+        shading_images.append(to8b(shading_image).transpose(1,2,0))
+        torchvision.utils.save_image(shading_image, os.path.join(shading_path, '{0:05d}'.format(count) + ".png"))
+
         # render_list.append(rendering)
     
         if name in ["train", "test"]:
@@ -87,7 +90,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     #         count +=1
     
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=30, quality=8)
-    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'normal_map.mp4'), normal_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'shading.mp4'), shading_images, fps=30, quality=8)
 
 
 def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, skip_video: bool):
@@ -104,6 +107,48 @@ def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipelin
             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
         if not skip_video:
             render_set(dataset.model_path, "video", scene.loaded_iter, scene.getVideoCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
+
+
+def phong_reflection(normal_map, cam2world, k_a = 0.1, k_d = 0.7, k_s = 0.5, shininess = 16):
+    """
+    Computes the per pixel light intensity using the Phong reflection model based on the provided normal map
+    and camera-to-world transformation matrix.
+
+    Parameters:
+        normal_map (torch.tensor [3, H, W]): The normal map of the surface as a 3D array.
+        cam2world (torch.tensor [4,4]): Camera-to-world transformation matrix.
+        k_a (float, optional): Ambient reflection coefficient, defaults to 0.1.
+        k_d (float, optional): Diffuse reflection coefficient, defaults to 0.7.
+        k_s (float, optional): Specular reflection coefficient, defaults to 0.5.
+        shininess (int, optional): Shininess factor that affects specular highlight size, defaults to 16.
+
+    Returns:
+         torch.tensor [1, H, W]: An array representing the reflected light intensities per pixel.
+
+    For more details, see the Phong reflection model:
+    https://en.wikipedia.org/wiki/Phong_reflection_model
+    """
+    with torch.no_grad():
+        light_intensity = torch.tensor([1.0, 1.0, 1.0]).cuda().view(3, 1, 1)
+        diffuse_intensity = torch.tensor([1.0, 1.0, 1.0]).cuda().view(3, 1, 1)
+        ambient_intensity = torch.tensor([0.1, 0.1, 0.1]).cuda().view(3, 1, 1)
+
+        light_direction = torch.tensor([1.0, -1.0, 0]).cuda().view(3, 1, 1)
+        light_direction = light_direction / torch.norm(light_direction)
+
+        viewer_direction = (cam2world[:3,:3] @ torch.tensor([0, 0, 1.0]).cuda()).view(3, 1, 1)
+        viewer_direction = viewer_direction / torch.norm(viewer_direction)
+
+        reflect_direction = 2.0 * torch.sum(light_direction * normal_map, dim=0, keepdim=True) * normal_map - light_direction
+
+        # Total intensity
+        phong_intensity = k_a * ambient_intensity\
+                        + k_d * torch.sum(normal_map * light_direction, dim=0) * diffuse_intensity\
+                        + k_s * torch.pow(torch.sum(viewer_direction * reflect_direction, dim=0), shininess) * light_intensity
+
+        phong_intensity = (phong_intensity - phong_intensity.min()) / (phong_intensity.max() - phong_intensity.min())
+
+        return phong_intensity
 
 
 if __name__ == "__main__":
