@@ -31,6 +31,7 @@ from utils.extra_utils import o3d_knn, weighted_l2_loss_v2, image_sampler, calcu
 from utils.scene_utils import render_training_image
 from time import time
 from utils.graphics_utils import depth_double_to_normal, point_double_to_normal
+from utils.train_utils import sample_sequential_frame_n_camera, sample_first_frame_then_sequential
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -115,22 +116,6 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     kernel_size = dataset.kernel_size
     ###
 
-    # Sequential frame sampling:
-    if dataset.sequential_frame_sampling:
-        print_remainder_iterations_flag = True
-        remainder_iterations_left = False
-        if dataset.sequential_from_iter > 0:
-            # If we don't sequentially sample the frames from the beginning and want to train longer on the first frame, we must subtract 1 frame from the total number of frames
-            FRAME_CHANGING_AFTER = (final_iter - dataset.sequential_from_iter) // (scene.maxtime - 1)
-            if (final_iter - dataset.sequential_from_iter) % (scene.maxtime - 1) != 0:
-                remainder_iterations_left = True
-        else:
-            FRAME_CHANGING_AFTER = final_iter // scene.maxtime
-            if final_iter % (scene.maxtime) != 0:
-                remainder_iterations_left = True
-        current_frame = 0
-        print("Starting with frame {}".format(current_frame))
-
     start_time = time()
     for iteration in range(first_iter, final_iter+1):
         iter_start.record()
@@ -147,21 +132,10 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             frame_set = np.random.choice(range(math.ceil(len(viewpoint_stack) / 2)), size=max(opt.batch_size // 2, 1))
             viewpoint_cams = [viewpoint_stack[(f*2) % scene.maxtime] for f in frame_set] + \
                              [viewpoint_stack[(f*2+1) % scene.maxtime] for f in frame_set]
-        # TODO move this logic to separate method, that just returns frame number from iteration and configuration given
-        elif dataset.sequential_frame_sampling and iteration > dataset.sequential_from_iter:
-            # Sequential frame sampling activated and current iteration has surpassed the initial time allocated for the training of the first time frame
-            sampled_cam_no = np.random.choice(range(len(viewpoint_stack) // scene.maxtime), size=opt.batch_size)
-            sampled_frame_no = np.full_like(sampled_cam_no, current_frame)
-            viewpoint_cams = [viewpoint_stack[c * scene.maxtime + f] for c, f in zip(sampled_cam_no, sampled_frame_no)]
-            if remainder_iterations_left and current_frame == scene.maxtime - 1:
-                # If we are on the last frame and the number of iterations is not exactly divisible by the number of frames, we want to train the last frame for the remainder of iterations
-                if print_remainder_iterations_flag:
-                    print("Staying on frame {} and training for another {} iterations".format(current_frame, final_iter - iteration))
-                    print_remainder_iterations_flag = False
-            elif iteration % FRAME_CHANGING_AFTER == 0:
-                # After FRAME_CHANGING_AFTER iterations have passed, go to next frame
-                current_frame += 1
-                print("Continuing next iteration with frame {}".format(current_frame))
+        elif dataset.sampling_sequential_frame_enabled:
+            sampled_frame_no, viewpoint_cams = sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, final_iter)
+        elif dataset.sampling_first_frame_then_sequential_enabled:
+            sampled_frame_no, viewpoint_cams = sample_first_frame_then_sequential(dataset, scene, opt, viewpoint_stack, iteration, final_iter)
         else:
             # Pick camera
             method = "random" if iteration < opt.random_until or iteration % 2 == 1 else "by_error"
@@ -248,6 +222,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         loss += opt.reg_coef * embedding_loss
 
         # smoothness reg on temporal embeddings
+        temporal_loss = torch.tensor(0)
         if opt.coef_tv_temporal_embedding > 0:
             weights = gaussians._deformation.weight
             N, C = weights.shape
@@ -256,7 +231,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             temporal_loss = torch.square(second_difference).mean()
             loss += opt.coef_tv_temporal_embedding * temporal_loss
 
-# TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
+        # TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
         ### Depth normal loss from RaDe-GS
         if opt.radegs_regularization_from_iter:
             lambda_depth_normal = opt.lambda_depth_normal
@@ -282,7 +257,6 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
         loss += depth_normal_loss * lambda_depth_normal
         ###
-
 
         loss.backward()
         viewspace_point_tensor_grad = torch.zeros_like(viewspace_point_tensor)

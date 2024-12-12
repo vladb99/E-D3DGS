@@ -2,9 +2,8 @@ _base_ = './default.py'
 
 ModelParams = dict(
     disable_filter3D=True,
-    sampling_sequential_frame_enabled = False,
-    sampling_first_frame_then_sequential_enabled = True,
-    sampling_first_frame_change= 11_000
+    sequential_frame_sampling = True,
+    sequential_from_iter = 11_000
 )
 
 ModelHiddenParams = dict(
