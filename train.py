@@ -323,7 +323,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                     test_cam.load_image()  # for lazy loading (to avoid OOM issue)
                 render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size,
                                     require_coord=require_coord and reg_kick_on,
-                                    require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration,
+                                    require_depth=require_depth and reg_kick_on, cam_no=test_cam.cam_no, iter=iteration,
                                     num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings, disable_filter3D=dataset.disable_filter3D)
                 test_image = render_pkg["render"].unsqueeze(0)
                 gt_image =  test_cam.original_image.cuda().unsqueeze(0)
