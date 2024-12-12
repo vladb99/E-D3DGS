@@ -222,7 +222,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         loss += opt.reg_coef * embedding_loss
 
         # smoothness reg on temporal embeddings
-        temporal_loss = torch.tensor(0)
+        temporal_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
         if opt.coef_tv_temporal_embedding > 0:
             weights = gaussians._deformation.weight
             N, C = weights.shape
@@ -233,7 +233,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
         # TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
         ### Depth normal loss from RaDe-GS
-        if opt.radegs_regularization_from_iter:
+        if reg_kick_on:
             lambda_depth_normal = opt.lambda_depth_normal
             if require_depth:
                 rendered_expected_depth: torch.Tensor = render_pkg["expected_depth"]
@@ -253,7 +253,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 1].mean()
         else:
             lambda_depth_normal = 0
-            depth_normal_loss = torch.tensor([0], dtype=torch.float32, device="cuda")
+            depth_normal_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
 
         loss += depth_normal_loss * lambda_depth_normal
         ###
