@@ -9,8 +9,8 @@ ModelParams = dict(
 
 ModelHiddenParams = dict(
     total_num_frames = 100,
-    deform_from_iter= 11_000
 )
+
 OptimizationParams = dict(
     maxtime = 100,
     iterations = 80_000,
