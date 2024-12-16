@@ -155,6 +155,7 @@ class OptimizationParams(ParamGroup):
         self.num_multiview_ssim = 0
         self.offsets_lr = 0.00002
         self.reg_coef = 1.0
+        self.max_number_gaussians = 1_000_000
 
         # From RaDe-GS
         self.radegs_regularization_from_iter = 15_000

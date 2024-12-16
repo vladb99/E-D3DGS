@@ -18,5 +18,7 @@ OptimizationParams = dict(
     position_lr_max_steps = 80_000,
     deformation_lr_max_steps = 80_000,
 
-    radegs_regularization_from_iter = 90_000
+    radegs_regularization_from_iter = 90_000,
+
+    max_number_gaussians = 135_000
 )

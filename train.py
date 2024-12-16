@@ -195,8 +195,6 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             Lssim = (1 - ssim_value) / 2
             loss = Ll1 + opt.lambda_dssim * Lssim
         else:
-            print("Why???????")
-            print(sampled_frame_no)
             loss = Ll1
 
         psnr_ = psnr(image_tensor, gt_image_tensor).mean().double()
@@ -325,7 +323,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 opacity_threshold = opt.opacity_threshold_fine_init - iteration*(opt.opacity_threshold_fine_init - opt.opacity_threshold_fine_after)/(opt.densify_until_iter)
                 densify_threshold = opt.densify_grad_threshold_fine_init - iteration*(opt.densify_grad_threshold_fine_init - opt.densify_grad_threshold_after)/(opt.densify_until_iter )
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and gaussians._xyz.size()[0] < opt.max_number_gaussians:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
 
                     gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
