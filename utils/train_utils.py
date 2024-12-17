@@ -28,7 +28,7 @@ def sample_first_frame_then_sequential(dataset, scene, opt, viewpoint_stack, ite
     return sampled_frame_no, viewpoint_cams
 
 
-def sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, final_iter):
+def sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, final_iter, is_sample_from_past: bool):
     number_of_iterations = final_iter
     number_of_frames = scene.maxtime
     frame_changing_after = number_of_iterations // number_of_frames
@@ -39,6 +39,12 @@ def sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, fin
     if sampled_frame_no >= number_of_frames:
         # If number_of_iterations // number_of_frames doesn't divide perfectly, we remain on the last frame on the remainder iterations
         sampled_frame_no = number_of_frames - 1
+
+    # we also want to sample from past frames
+    if is_sample_from_past and sampled_frame_no != 0:
+        if iteration % 2 == 0:
+            sampled_frame_no = np.random.randint(0, sampled_frame_no)
+
     sampled_frame_no = np.full_like(sampled_cam_no, sampled_frame_no)
     viewpoint_cams = [viewpoint_stack[c * scene.maxtime + f] for c, f in zip(sampled_cam_no, sampled_frame_no)]
 

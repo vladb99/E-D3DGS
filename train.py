@@ -133,7 +133,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             viewpoint_cams = [viewpoint_stack[(f*2) % scene.maxtime] for f in frame_set] + \
                              [viewpoint_stack[(f*2+1) % scene.maxtime] for f in frame_set]
         elif dataset.sampling_sequential_frame_enabled:
-            sampled_frame_no, viewpoint_cams = sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, final_iter)
+            sampled_frame_no, viewpoint_cams = sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, final_iter, dataset.is_sample_from_past)
         elif dataset.sampling_first_frame_then_sequential_enabled:
             sampled_frame_no, viewpoint_cams = sample_first_frame_then_sequential(dataset, scene, opt, viewpoint_stack, iteration, final_iter)
         else:
@@ -168,6 +168,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 viewpoint_cam.load_image()  # for lazy loading (to avoid OOM issue)
             cam_no = viewpoint_cam.cam_no
             frame_no = viewpoint_cam.frame_no
+            print(f"Sampling camera ${cam_no} from frame ${frame_no}")
             cam_no_list.append(cam_no)
             frame_no_list.append(frame_no)
             render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size, require_coord=require_coord and reg_kick_on, require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings, disable_filter3D=dataset.disable_filter3D)

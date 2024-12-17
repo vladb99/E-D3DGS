@@ -60,6 +60,7 @@ class ModelParams(ParamGroup):
         self.sampling_sequential_frame_enabled = False,
         self.sampling_first_frame_then_sequential_enabled = False,
         self.sampling_first_frame_change = 11_000
+        self.is_sample_from_past = False
         # From RaDe-GS
         self.use_coord_map = False
         self.kernel_size = 0.0  # Size of 2D filter in mip-splatting
