@@ -2,13 +2,10 @@ _base_ = './default.py'
 
 ModelParams = dict(
     disable_filter3D=True,
-    # sequential_frame_sampling = True,
-    # sequential_from_iter = 11_000
 )
 
 ModelHiddenParams = dict(
     total_num_frames = 100,
-    # deform_from_iter= 11_000
 )
 OptimizationParams = dict(
     maxtime = 100,
@@ -17,5 +14,5 @@ OptimizationParams = dict(
     position_lr_max_steps = 80_000,
     deformation_lr_max_steps = 80_000,
 
-    radegs_regularization_from_iter = 15_000
+    radegs_regularization_from_iter = 15_000,
 )

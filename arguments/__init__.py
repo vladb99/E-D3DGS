@@ -57,8 +57,8 @@ class ModelParams(ParamGroup):
         self.render_process=False
         self.loader = "colmap"
         self.shuffle = True
-        self.sampling_sequential_frame_enabled = False,
-        self.sampling_first_frame_then_sequential_enabled = False,
+        self.sampling_sequential_frame_enabled = False
+        self.sampling_first_frame_then_sequential_enabled = False
         self.sampling_first_frame_change = 11_000
         self.is_sample_from_past = False
         # From RaDe-GS
