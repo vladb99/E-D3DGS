@@ -187,7 +187,7 @@ def get_time_steps(scene: Scene) -> [float]:
         time_steps.append(cam.time)
     return time_steps
 
-def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, timestep: int, max_n_gaussians: int, is_static:bool):
+def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, timestep: int, max_n_gaussians: int):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, hyperparam)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, duration=hyperparam.total_num_frames, loader=dataset.loader, opt=opt)
@@ -197,18 +197,6 @@ def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt
 
         if max_n_gaussians == -1:
             max_n_gaussians = None
-
-        if is_static:
-            mesh = gaussians_to_mesh(
-                gaussian_positions=gaussians.get_xyz,
-                gaussian_colors=gaussians.get_features,
-                gaussian_scales=gaussians.get_scaling,
-                gaussian_opacities=gaussians.get_opacity,
-                gaussian_rotations=gaussians.get_rotation,
-                max_n_gaussians=max_n_gaussians,
-            )
-            mesh.export(os.path.join(meshes_path, 'static' + ".ply"))
-            return
 
         timesteps = get_time_steps(scene=scene)
 
@@ -263,7 +251,6 @@ if __name__ == "__main__":
     parser.add_argument("--configs", type=str)
     parser.add_argument("--timestep", default=-1, type=int)
     parser.add_argument("--max_n_gaussians", default=-1, type=int)
-    parser.add_argument("--is_static", action="store_true")
 
     # import sys
     # args = parser.parse_args(sys.argv[1:])
@@ -278,4 +265,4 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    visualize_geometry(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, args.timestep, args.max_n_gaussians, args.is_static)
+    visualize_geometry(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, args.timestep, args.max_n_gaussians)
