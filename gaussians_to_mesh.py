@@ -15,6 +15,7 @@ from argparse import ArgumentParser
 from utils.general_utils import safe_state
 from gaussian_renderer import GaussianModel
 from scene import Scene
+from os import makedirs
 
 ObjectType = Dict[str, Union[List[np.ndarray], np.ndarray]]
 
@@ -180,28 +181,60 @@ def load_obj(path: Union[str, TextIO], return_vn: bool = False) -> ObjectType:
         out.pop("vn")
         return
 
-def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, pipeline : PipelineParams):
+def get_time_steps(scene: Scene) -> [float]:
+    time_steps = []
+    for cam in scene.getVideoCameras():
+        time_steps.append(cam.time)
+    return time_steps
+
+def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, pipeline : PipelineParams, timestep: int):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, hyperparam)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, duration=hyperparam.total_num_frames, loader=dataset.loader, opt=opt)
 
-        print(gaussians._xyz.shape)
-        print(gaussians._features_dc.shape)
-        print(gaussians._scaling.shape)
-        print(gaussians._opacity.shape)
-        print(gaussians._rotation.shape)
-        print(gaussians._features_rest.shape)
+        timesteps = get_time_steps(scene=scene)
 
-        mesh = gaussians_to_mesh(
-            gaussian_positions=gaussians.get_xyz,
-            gaussian_colors=gaussians.get_features,
-            gaussian_scales=gaussians.get_scaling,
-            gaussian_opacities=gaussians.get_opacity,
-            gaussian_rotations=gaussians.get_rotation,
-        )
-        mesh.export('test.ply')
+        if timestep > len(timesteps):
+            raise Exception("timestep must be smaller than the total number of frames")
 
+        meshes_path = os.path.join(dataset.model_path, "gaussianMeshes", "ours_{}".format(scene.loaded_iter))
+        makedirs(meshes_path, exist_ok=True)
 
+        if timestep != -1:
+            timesteps = [timestep[timestep - 1]]
+
+        print("Generating gaussian meshes")
+        for index in tqdm(range(len(timesteps))):
+            means3D = gaussians.get_xyz
+            scales = gaussians._scaling
+            rotations = gaussians._rotation
+            opacity = gaussians._opacity
+            shs = gaussians.get_features
+            time = torch.tensor(timesteps[index]).to(means3D.device).repeat(means3D.shape[0], 1)
+            means3D_final, scales_deformed, rotations_deformed, opacity_deformed, shs_final, extras = gaussians._deformation(
+                means3D,
+                scales,
+                rotations,
+                opacity,
+                time,
+                None, gaussians,
+                None, shs,
+                iter=scene.loaded_iter,
+                num_down_emb_c=hyperparam.min_embeddings,
+                num_down_emb_f=hyperparam.min_embeddings)
+            rotations_final = gaussians.rotation_activation(rotations_deformed)
+            scales_final = gaussians.scaling_activation(scales_deformed)
+            opacity_final = gaussians.opacity_activation(opacity_deformed)
+
+            mesh = gaussians_to_mesh(
+                gaussian_positions=means3D_final,
+                gaussian_colors=shs_final,
+                gaussian_scales=scales_final,
+                gaussian_opacities=opacity_final,
+                gaussian_rotations=rotations_final,
+                max_n_gaussians=50000
+            )
+            mesh.export(os.path.join(meshes_path, '{0:05d}'.format(index) + ".ply"))
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -211,11 +244,9 @@ if __name__ == "__main__":
     pipeline = PipelineParams(parser)
     hyperparam = ModelHiddenParams(parser)
     parser.add_argument("--iteration", default=-1, type=int)
-    parser.add_argument("--skip_train", action="store_true")
-    parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--skip_video", action="store_true")
     parser.add_argument("--configs", type=str)
+    parser.add_argument("--timestep", default=-1, type=int)
 
     # import sys
     # args = parser.parse_args(sys.argv[1:])
@@ -230,4 +261,4 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    visualize_geometry(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, pipeline.extract(args))
+    visualize_geometry(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.timestep)
