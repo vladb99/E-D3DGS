@@ -29,11 +29,9 @@ to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, hyperparam=None, disable_filter3D=True, ):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    shading_path = os.path.join(model_path, name, "ours_{}".format(iteration), "shading")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
-    makedirs(shading_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     render_images = []
     shading_images = []
@@ -56,15 +54,10 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         time1 = time()
         render_pkg = render_old(view, gaussians, pipeline, background, iter=iteration, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f)
         rendering = render_pkg["render"]
-        normal_map = render_pkg["normal"]
         time2 = time()
         total_time += (time2 - time1)
         render_images.append(to8b(rendering).transpose(1,2,0))
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(count) + ".png"))
-
-        shading_image = phong_reflection(normal_map, cam2world = view.world_view_transform.T.inverse())
-        shading_images.append(to8b(shading_image).transpose(1,2,0))
-        torchvision.utils.save_image(shading_image, os.path.join(shading_path, '{0:05d}'.format(count) + ".png"))
 
         # render_list.append(rendering)
     

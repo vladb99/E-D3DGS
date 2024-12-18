@@ -187,7 +187,7 @@ def get_time_steps(scene: Scene) -> [float]:
         time_steps.append(cam.time)
     return time_steps
 
-def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, pipeline : PipelineParams, timestep: int):
+def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, timestep: int, max_n_gaussians: int):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, hyperparam)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, duration=hyperparam.total_num_frames, loader=dataset.loader, opt=opt)
@@ -202,6 +202,9 @@ def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt
 
         if timestep != -1:
             timesteps = [timestep[timestep - 1]]
+
+        if max_n_gaussians == -1:
+            max_n_gaussians = None
 
         print("Generating gaussian meshes")
         for index in tqdm(range(len(timesteps))):
@@ -232,7 +235,7 @@ def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt
                 gaussian_scales=scales_final,
                 gaussian_opacities=opacity_final,
                 gaussian_rotations=rotations_final,
-                max_n_gaussians=50000
+                max_n_gaussians=max_n_gaussians,
             )
             mesh.export(os.path.join(meshes_path, '{0:05d}'.format(index) + ".ply"))
 
@@ -247,6 +250,7 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--configs", type=str)
     parser.add_argument("--timestep", default=-1, type=int)
+    parser.add_argument("--max_n_gaussians", default=-1, type=int)
 
     # import sys
     # args = parser.parse_args(sys.argv[1:])
@@ -261,4 +265,4 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    visualize_geometry(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.timestep)
+    visualize_geometry(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, args.timestep, args.max_n_gaussians)
