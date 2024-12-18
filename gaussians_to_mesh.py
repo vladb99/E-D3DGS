@@ -198,7 +198,7 @@ def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt
         if max_n_gaussians == -1:
             max_n_gaussians = None
 
-        if not is_static:
+        if is_static:
             mesh = gaussians_to_mesh(
                 gaussian_positions=gaussians.get_xyz,
                 gaussian_colors=gaussians.get_features,
