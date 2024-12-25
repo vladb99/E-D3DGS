@@ -27,7 +27,7 @@ from time import time
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, hyperparam=None, disable_filter3D=True, ):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, kernel_size, hyperparam=None, disable_filter3D=True):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     shading_path = os.path.join(model_path, name, "ours_{}".format(iteration), "shading")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
@@ -54,7 +54,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 view.load_image()
         time1 = time()
-        render_pkg = render(view, gaussians, pipeline, background, kernel_size=0, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+        render_pkg = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
         rendering = render_pkg["render"]
         normal_map = render_pkg["normal"]
         time2 = time()
@@ -102,11 +102,11 @@ def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipelin
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
+            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D, kernel_size=dataset.kernel_size)
         if not skip_test:
-            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
+            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D, kernel_size=dataset.kernel_size)
         if not skip_video:
-            render_set(dataset.model_path, "video", scene.loaded_iter, scene.getVideoCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D)
+            render_set(dataset.model_path, "video", scene.loaded_iter, scene.getVideoCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D, kernel_size=dataset.kernel_size)
 
 
 def phong_reflection(normal_map, cam2world, k_a = 0.1, k_d = 0.7, k_s = 0.5, shininess = 16):
