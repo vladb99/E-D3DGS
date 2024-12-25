@@ -223,13 +223,12 @@ if __name__ == "__main__" :
     startframe = args.startframe
     endframe = args.endframe
 
-
     if startframe >= endframe:
         print("start frame must smaller than end frame")
         quit()
-    if startframe < 0 or endframe > 110:
-        print("frame must in range 0-110")
-        quit()
+    # if startframe < 0 or endframe > 110:
+    #     print("frame must in range 0-110")
+    #     quit()
     if not os.path.exists(videopath):
         print("path not exist")
         quit()
