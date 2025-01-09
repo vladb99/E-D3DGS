@@ -6,10 +6,10 @@ ModelParams = dict(
 )
 
 ModelHiddenParams = dict(
-    total_num_frames = 105,
+    total_num_frames = 147,
 )
 OptimizationParams = dict(
-    maxtime = 105,
+    maxtime = 147,
     iterations = 80_000,
     densify_until_iter = 80_000,
     position_lr_max_steps = 80_000,
