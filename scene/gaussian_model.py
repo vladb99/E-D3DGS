@@ -90,7 +90,7 @@ class GaussianModel:
     def restore(self, model_args, training_args):
         (self.active_sh_degree, 
         self._xyz, 
-        self._deformation,
+        deformation_dict,
         self._features_dc, 
         self._features_rest,
         self._embedding,
@@ -105,6 +105,7 @@ class GaussianModel:
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
+        # self._deformation.load_state_dict(deformation_dict)
         self.optimizer.load_state_dict(opt_dict)
 
     @property
