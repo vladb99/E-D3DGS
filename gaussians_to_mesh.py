@@ -17,6 +17,8 @@ from gaussian_renderer import GaussianModel
 from scene import Scene
 from os import makedirs
 
+from utils.mesh_extraction_utils import get_time_steps
+
 ObjectType = Dict[str, Union[List[np.ndarray], np.ndarray]]
 
 
@@ -180,12 +182,6 @@ def load_obj(path: Union[str, TextIO], return_vn: bool = False) -> ObjectType:
     else:
         out.pop("vn")
         return
-
-def get_time_steps(scene: Scene) -> [float]:
-    time_steps = []
-    for cam in scene.getVideoCameras():
-        time_steps.append(cam.time)
-    return time_steps
 
 def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, timestep: int, max_n_gaussians: int):
     with torch.no_grad():
