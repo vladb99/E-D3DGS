@@ -49,3 +49,13 @@ def sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, fin
     viewpoint_cams = [viewpoint_stack[c * scene.maxtime + f] for c, f in zip(sampled_cam_no, sampled_frame_no)]
 
     return sampled_frame_no, viewpoint_cams
+
+def sample_frame_with_preference(scene, opt, dataset, viewpoint_stack):
+    total_num_frames = scene.maxtime
+    sampled_cam_no = np.random.choice(range(len(viewpoint_stack) // scene.maxtime), size=opt.batch_size)
+    if np.random.random() < dataset.frame_preference_probability:
+        sampled_frame_no = np.random.choice(dataset.frame_indices_higher_preference, size=opt.batch_size)
+    else:
+        sampled_frame_no = np.random.choice(range(total_num_frames), size=opt.batch_size)
+    viewpoint_cams = [viewpoint_stack[c * scene.maxtime + f] for c, f in zip(sampled_cam_no, sampled_frame_no)]
+    return sampled_frame_no, viewpoint_cams

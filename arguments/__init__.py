@@ -61,6 +61,8 @@ class ModelParams(ParamGroup):
         self.sampling_first_frame_then_sequential_enabled = False
         self.sampling_first_frame_change = 11_000
         self.is_sample_from_past = False
+        self.frame_indices_higher_preference = []
+        self.frame_preference_probability = 0.5
         # From RaDe-GS
         self.use_coord_map = False
         self.kernel_size = 0.0  # Size of 2D filter in mip-splatting
@@ -156,7 +158,7 @@ class OptimizationParams(ParamGroup):
         self.num_multiview_ssim = 0
         self.offsets_lr = 0.00002
         self.reg_coef = 1.0
-        self.max_number_gaussians = 1_000_000
+        self.max_number_gaussians = 200_000
 
         # From RaDe-GS
         self.radegs_regularization_from_iter = 15_000

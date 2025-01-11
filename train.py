@@ -9,6 +9,8 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 import math
+import shutil
+
 import numpy as np
 import random
 import os
@@ -31,7 +33,8 @@ from utils.extra_utils import o3d_knn, weighted_l2_loss_v2, image_sampler, calcu
 from utils.scene_utils import render_training_image
 from time import time
 from utils.graphics_utils import depth_double_to_normal, point_double_to_normal
-from utils.train_utils import sample_sequential_frame_n_camera, sample_first_frame_then_sequential
+from utils.train_utils import sample_sequential_frame_n_camera, sample_first_frame_then_sequential, \
+    sample_frame_with_preference
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -136,6 +139,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             sampled_frame_no, viewpoint_cams = sample_sequential_frame_n_camera(scene, opt, viewpoint_stack, iteration, final_iter, dataset.is_sample_from_past)
         elif dataset.sampling_first_frame_then_sequential_enabled:
             sampled_frame_no, viewpoint_cams = sample_first_frame_then_sequential(dataset, scene, opt, viewpoint_stack, iteration, final_iter)
+        elif len(dataset.frame_indices_higher_preference) != 0:
+            sampled_frame_no, viewpoint_cams = sample_frame_with_preference(scene, opt, dataset, viewpoint_stack)
         else:
             # Pick camera
             method = "random" if iteration < opt.random_until or iteration % 2 == 1 else "by_error"
@@ -390,6 +395,8 @@ def prepare_output_and_logger(expname):
     os.makedirs(args.model_path, exist_ok = True)
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
+
+    shutil.copy(args.configs, os.path.join(args.model_path, "configuration.py"))
 
     # Create Tensorboard writer
     tb_writer = None
