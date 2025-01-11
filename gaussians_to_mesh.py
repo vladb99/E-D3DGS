@@ -204,7 +204,7 @@ def visualize_geometry(dataset : ModelParams, hyperparam: ModelHiddenParams, opt
             raise Exception("timestep must be smaller than the total number of frames")
 
         if timestep != -1:
-            timesteps = [timestep[timestep - 1]]
+            timesteps = [timesteps[timestep]]
 
         print("Generating gaussian meshes")
         for index in tqdm(range(len(timesteps))):
@@ -249,7 +249,7 @@ if __name__ == "__main__":
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--configs", type=str)
-    parser.add_argument("--timestep", default=-1, type=int)
+    parser.add_argument("--timestep", default=-1, type=int, description="Index of the timestep")
     parser.add_argument("--max_n_gaussians", default=-1, type=int)
 
     # import sys
