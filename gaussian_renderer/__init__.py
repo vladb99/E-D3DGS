@@ -256,8 +256,7 @@ def render_old(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tens
 
 
 # integration is adopted from GOF for marching tetrahedra https://github.com/autonomousvision/gaussian-opacity-fields/blob/main/gaussian_renderer/__init__.py
-def integrate(points3D, viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, kernel_size: float,
-              scaling_modifier=1.0, override_color=None):
+def integrate(points3D, viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, kernel_size: float, loaded_iter, scaling_modifier=1.0, override_color=None, num_down_emb_c=5, num_down_emb_f=5):
     """
     integrate Gaussians to the points, we also render the image for visual comparison.
 
@@ -297,7 +296,19 @@ def integrate(points3D, viewpoint_camera, pc: GaussianModel, pipe, bg_color: tor
 
     means3D = pc.get_xyz
     means2D = screenspace_points
-    opacity = pc.get_opacity_with_3D_filter
+    scales = pc._scaling
+    rotations = pc._rotation
+    opacity = pc._opacity
+    shs = pc.get_features
+    time = torch.tensor(viewpoint_camera.time).to(means3D.device).repeat(means3D.shape[0],1)
+
+    means3D_final, scales_deformed, rotations_deformed, opacity_deformed, shs_final, extras = pc._deformation(means3D, scales,
+                                                                                                     rotations, opacity,
+                                                                                                     time, None, pc,
+                                                                                                     None, shs,
+                                                                                                     iter=loaded_iter,
+                                                                                                     num_down_emb_c=num_down_emb_c,
+                                                                                                     num_down_emb_f=num_down_emb_f)
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -307,8 +318,10 @@ def integrate(points3D, viewpoint_camera, pc: GaussianModel, pipe, bg_color: tor
     if pipe.compute_cov3D_python:
         cov3D_precomp = pc.get_covariance(scaling_modifier)
     else:
-        scales = pc.get_scaling_with_3D_filter
-        rotations = pc.get_rotation
+        # In the original code, opacity isn't set here but above the if statement
+        scales_final, opacity_final = pc.apply_scaling_n_opacity_with_3D_filter(opacity=opacity_deformed,
+                                                                                scales=scales_deformed)
+        rotations_final = pc.rotation_activation(rotations_deformed)
 
     depth_plane_precomp = None
 
@@ -335,13 +348,13 @@ def integrate(points3D, viewpoint_camera, pc: GaussianModel, pipe, bg_color: tor
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     rendered_image, alpha_integrated, color_integrated, point_coordinate, point_sdf, radii = rasterizer.integrate(
         points3D=points3D,
-        means3D=means3D,
+        means3D=means3D_final,
         means2D=means2D,
-        shs=shs,
+        shs=shs_final,
         colors_precomp=colors_precomp,
-        opacities=opacity,
-        scales=scales,
-        rotations=rotations,
+        opacities=opacity_final,
+        scales=scales_final,
+        rotations=rotations_final,
         cov3D_precomp=cov3D_precomp,
         view2gaussian_precomp=depth_plane_precomp)
 
