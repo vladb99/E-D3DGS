@@ -1,5 +1,8 @@
 #adopted from https://github.com/autonomousvision/gaussian-opacity-fields/blob/main/extract_mesh.py
+import cv2
 import torch
+from scipy.constants import alpha
+
 from scene import Scene
 import os
 from os import makedirs
@@ -39,8 +42,6 @@ def evaluage_cull_alpha(points, views, masks, gaussians, pipeline, background, k
     with torch.no_grad():
         for cam_id, view in enumerate(tqdm(views, desc="Rendering progress")):
             torch.cuda.empty_cache()
-            if type(view.original_image) == type(None):
-                view.load_image()  # for lazy loading (to avoid OOM issue)
             ret = integrate(points, view, gaussians, pipeline, background, kernel_size, loaded_iter=loaded_iter, num_down_emb_c=hyperparam.min_embeddings, num_down_emb_f=hyperparam.min_embeddings)
             alpha_integrated = ret["alpha_integrated"]
             point_coordinate = ret["point_coordinate"]
@@ -49,7 +50,7 @@ def evaluage_cull_alpha(points, views, masks, gaussians, pipeline, background, k
             rendered_mask = ret["render"][7]
             mask = rendered_mask[None]
             if not view.gt_alpha_mask is None:
-                mask = mask * view.gt_alpha_mask
+                mask = mask * view.gt_alpha_mask.to(mask.device)
             if not masks is None:
                 mask = mask * masks[cam_id]
             valid_point_prob = torch.nn.functional.grid_sample(mask.type(torch.float32)[None],point_coordinate[None,None],padding_mode='zeros',align_corners=False)
@@ -165,7 +166,21 @@ def extract_mesh(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: Opti
         views = []
         for cam in cams:
             if cam.time == timestep:
+                if type(cam.original_image) == type(None):
+                    cam.load_image()  # for lazy loading (to avoid OOM issue)
                 views.append(cam)
+
+        for view in views:
+            alpha_mask = cv2.imread(os.path.join(dataset.source_path, "alpha_masks", view.image_name))
+            alpha_mask = alpha_mask[:,:,0]
+            alpha_mask_resized = cv2.resize(alpha_mask, (view.image_width, view.image_height), interpolation=cv2.INTER_AREA)
+            normalized_resized_alpha_mask = alpha_mask_resized / 255.0
+            normalized_resized_alpha_mask = torch.from_numpy(normalized_resized_alpha_mask)
+            normalized_resized_alpha_mask = normalized_resized_alpha_mask.unsqueeze(0)
+            # import matplotlib.pyplot as plt
+            # plt.imshow(cv2.cvtColor(alpha_mask_resized, cv2.COLOR_BGR2RGB))
+            # plt.show()
+            view.gt_alpha_mask = normalized_resized_alpha_mask
 
         marching_tetrahedra_with_binary_search(dataset.model_path, "test", iteration, views, gaussians, pipeline, background, kernel_size, meshes_path, timestep, scene.loaded_iter)
 
