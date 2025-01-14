@@ -145,44 +145,45 @@ def get_time_steps(cams) -> [float]:
         time_steps.append(cam.time)
     return np.unique(np.array(time_steps))
 
-def extract_mesh(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, pipeline : PipelineParams, timestep_index: int):
+def extract_mesh(dataset : ModelParams, hyperparam: ModelHiddenParams, opt: OptimizationParams, iteration : int, pipeline : PipelineParams, start_timestep_index: int, end_timestep_index: int):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, hyperparam)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, duration=hyperparam.total_num_frames, loader=dataset.loader, opt=opt)
         
         gaussians.load_ply(os.path.join(dataset.model_path, "point_cloud", f"iteration_{iteration}", "point_cloud.ply"))
 
-        meshes_path = os.path.join(dataset.model_path, "tetrahedra_meshes", "ours_{}".format(scene.loaded_iter), "timestep_{}".format(timestep_index))
-        makedirs(meshes_path, exist_ok=True)
+        for timestep_index in tqdm(range(start_timestep_index, end_timestep_index + 1)):
+            meshes_path = os.path.join(dataset.model_path, "tetrahedra_meshes", "ours_{}".format(scene.loaded_iter), "timestep_{}".format(timestep_index))
+            makedirs(meshes_path, exist_ok=True)
 
-        bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
-        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-        kernel_size = dataset.kernel_size
+            bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
+            background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+            kernel_size = dataset.kernel_size
 
-        cams = scene.getTrainCameras()
-        # get only train cameras for specific timestep
-        timesteps = get_time_steps(cams=cams)
-        timestep = timesteps[timestep_index]
-        views = []
-        for cam in cams:
-            if cam.time == timestep:
-                if type(cam.original_image) == type(None):
-                    cam.load_image()  # for lazy loading (to avoid OOM issue)
-                views.append(cam)
+            cams = scene.getTrainCameras()
+            # get only train cameras for specific timestep
+            timesteps = get_time_steps(cams=cams)
+            timestep = timesteps[timestep_index]
+            views = []
+            for cam in cams:
+                if cam.time == timestep:
+                    if type(cam.original_image) == type(None):
+                        cam.load_image()  # for lazy loading (to avoid OOM issue)
+                    views.append(cam)
 
-        for view in views:
-            alpha_mask = cv2.imread(os.path.join(dataset.source_path, "alpha_masks", view.image_name))
-            alpha_mask = alpha_mask[:,:,0]
-            alpha_mask_resized = cv2.resize(alpha_mask, (view.image_width, view.image_height), interpolation=cv2.INTER_AREA)
-            normalized_resized_alpha_mask = alpha_mask_resized / 255.0
-            normalized_resized_alpha_mask = torch.from_numpy(normalized_resized_alpha_mask)
-            normalized_resized_alpha_mask = normalized_resized_alpha_mask.unsqueeze(0)
-            # import matplotlib.pyplot as plt
-            # plt.imshow(cv2.cvtColor(alpha_mask_resized, cv2.COLOR_BGR2RGB))
-            # plt.show()
-            view.gt_alpha_mask = normalized_resized_alpha_mask
+            for view in views:
+                alpha_mask = cv2.imread(os.path.join(dataset.source_path, "alpha_masks", view.image_name))
+                alpha_mask = alpha_mask[:,:,0]
+                alpha_mask_resized = cv2.resize(alpha_mask, (view.image_width, view.image_height), interpolation=cv2.INTER_AREA)
+                normalized_resized_alpha_mask = alpha_mask_resized / 255.0
+                normalized_resized_alpha_mask = torch.from_numpy(normalized_resized_alpha_mask)
+                normalized_resized_alpha_mask = normalized_resized_alpha_mask.unsqueeze(0)
+                # import matplotlib.pyplot as plt
+                # plt.imshow(cv2.cvtColor(alpha_mask_resized, cv2.COLOR_BGR2RGB))
+                # plt.show()
+                view.gt_alpha_mask = normalized_resized_alpha_mask
 
-        marching_tetrahedra_with_binary_search(dataset.model_path, "test", iteration, views, gaussians, pipeline, background, kernel_size, meshes_path, timestep, scene.loaded_iter)
+            marching_tetrahedra_with_binary_search(dataset.model_path, "test", iteration, views, gaussians, pipeline, background, kernel_size, meshes_path, timestep, scene.loaded_iter)
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -192,9 +193,10 @@ if __name__ == "__main__":
     hyperparam = ModelHiddenParams(parser)
     opt = OptimizationParams(parser)
     parser.add_argument("--iteration", default=80000, type=int)
-    parser.add_argument("--timestep_index", default=-1, type=int)
     parser.add_argument("--configs", type=str)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--start_timestep_index", default=-1, type=int)
+    parser.add_argument("--end_timestep_index", default=-1, type=int)
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
     if args.configs:
@@ -209,4 +211,4 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     torch.cuda.set_device(torch.device("cuda:0"))
     
-    extract_mesh(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.timestep_index)
+    extract_mesh(model.extract(args), hyperparam.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.start_timestep_index, args.end_timestep_index)
