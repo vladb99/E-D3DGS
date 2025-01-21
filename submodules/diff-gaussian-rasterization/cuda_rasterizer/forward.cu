@@ -463,16 +463,16 @@ renderCUDA(
 	float* __restrict__ out_coord,
 	float* __restrict__ out_mcoord,
 	float* __restrict__ out_normal,
+    float* __restrict__ proj_2D,
+	float* __restrict__ conic_2D,
+	float* __restrict__ gs_per_pixel,
+	float* __restrict__ weight_per_gs_pixel,
+	float* __restrict__ x_mu,
 	float* __restrict__ out_depth,
 	float* __restrict__ out_mdepth,
 	float* __restrict__ accum_coord,
 	float* __restrict__ accum_depth,
-	float* __restrict__ normal_length,
-	float* __restrict__ proj_2D,
-	float* __restrict__ conic_2D,
-	float* __restrict__ gs_per_pixel,
-	float* __restrict__ weight_per_gs_pixel,
-	float* __restrict__ x_mu
+	float* __restrict__ normal_length
 	)
 {
 	// Identify current tile and associated min/max pixel range.
@@ -561,6 +561,7 @@ renderCUDA(
 		}
 		block.sync();
 
+		uint32_t calc = 0;
 		// Iterate over current batch
 		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
 		{
@@ -636,9 +637,18 @@ renderCUDA(
 					max_contributor = contributor;
 			}
 
-			
 			weight += aT;
-			T = test_T;
+
+            T = test_T;
+            if (calc < 20)
+            {
+                gs_per_pixel[calc * H * W + pix_id] = collected_id[j];
+                weight_per_gs_pixel[calc * H * W + pix_id] = alpha * T;
+                x_mu[calc *2 * H * W + pix_id] = d.x;
+                x_mu[(calc * 2 + 1) * H * W + pix_id] = d.y;
+
+			}
+			calc++;
 
 			// Keep track of last range entry to update this
 			// pixel.

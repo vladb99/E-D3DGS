@@ -136,6 +136,12 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
             "visibility_filter": radii > 0,
             "radii": radii,
             "normal": rendered_normal,
+            "proj_2D": proj_2D,
+            "conic_2D": conic_2D,
+            "conic_2D_inv": conic_2D_inv,
+            "gs_per_pixel": gs_per_pixel,
+            "weight_per_gs_pixel": weight_per_gs_pixel,
+            "x_mu": x_mu,
             "sh_coefs_final": shs_final,
             "extras": extras,
     }

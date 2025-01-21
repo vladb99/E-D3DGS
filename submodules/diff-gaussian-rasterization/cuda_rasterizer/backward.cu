@@ -1209,7 +1209,7 @@ void BACKWARD::render(
         dL_dpixel_mdepth, dL_dalphas, dL_dpixel_normals, normalmap, \
         focal_x, focal_y, dL_dmean3D, dL_dmean2D, dL_dconic2D, dL_dopacity, dL_dcolors, \
         dL_dts, dL_dcamera_planes, dL_dray_planes, dL_dnormals, dL_proj_2D, dL_conic_2D, \
-	dL_conic_2D_inv, dummy_gs_per_pixel, dummy_weight_per_gs_pixel, grad_x_mu)
+        dL_conic_2D_inv, dummy_gs_per_pixel, dummy_weight_per_gs_pixel, grad_x_mu)
 
 	if (require_coord && require_depth)
 		RENDER_CUDA_CALL(true, true, true);
