@@ -18,7 +18,7 @@ from kornia import create_meshgrid
 import random 
 from torchvision import transforms
 from PIL import Image
-
+import cv2
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
@@ -127,6 +127,9 @@ class Camera(nn.Module):
         original_image = Image.open(self.image_path)
         original_image = original_image.resize(self.img_wh, Image.LANCZOS)
         self.original_image = self.transform(original_image)
+        flow_uv = np.load(self.image_path.replace('images', 'optical_flow').replace('.png','.npy'))
+        flow_uv = cv2.resize(flow_uv.transpose(2,1,0), (self.img_wh[1], self.img_wh[0])).transpose(0, 2, 1)
+        self.flow_uv = self.transform(flow_uv)
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
         if self.gt_alpha_mask is not None:
@@ -189,6 +192,7 @@ class Camerass(nn.Module):
             self.image_width = image[0] 
             self.image_height = image[1] 
             self.original_image = None
+            self.flow_uv = None
         
         self.image_width = 2 * self.image_width
         self.image_height = 2 * self.image_height # 

@@ -179,6 +179,16 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
+            #TODO: remove (debug only)
+            if False:
+                from PIL import Image
+                from utils import flow_viz
+                gt_flow_vector = viewpoint_cam.flow_uv
+                flow_image = flow_viz.flow_to_image(gt_flow_vector.cpu().detach().numpy())
+                PIL_image = Image.fromarray(np.uint8(flow_image))
+                PIL_image.show()
+                input("Press Enter to continue...")
+            
             if iteration >= hyper.deform_from_iter :#Todo add param to activate flow loss #Todo: make sure to skip last frame
                 viewpoint_cam.frame_no += 1
                 with torch.no_grad():
@@ -229,7 +239,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 predicted_flow_by_gs = (cov_multi + proj_2D_t_2[gs_per_pixel] - proj_2D_t_1[gs_per_pixel].detach() - x_mu.permute(0,2,3,1).detach()) #* weight_per_gs_pixel.detach().unsqueeze(-1)
 
                 #TODO: remove (debug only)
-                if True:
+                if False:
                     # Map image space flow to RGB color
                     from utils import flow_viz
                     predicted_flow_by_gs_rgb = flow_viz.flow_to_image(predicted_flow_by_gs.sum(0).cpu().detach().numpy())
