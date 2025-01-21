@@ -108,6 +108,8 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
         cov3D_precomp = cov3D_precomp)
     if len(outputs) == 8:
         rendered_image, radii, rendered_expected_coord, rendered_median_coord, rendered_expected_depth, rendered_median_depth, rendered_alpha, rendered_normal = outputs
+    elif len(outputs) == 14:
+        rendered_image, radii, rendered_expected_coord, rendered_median_coord, rendered_expected_depth, rendered_median_depth, rendered_alpha, rendered_normal, proj_2D, conic_2D, conic_2D_inv, gs_per_pixel, weight_per_gs_pixel, x_mu = outputs
     else:
         assert False, "only (depth-)diff-gaussian-rasterization from RaDe-GS supported!"
     # time4 = get_time()
