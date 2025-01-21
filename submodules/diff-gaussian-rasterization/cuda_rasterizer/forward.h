@@ -46,6 +46,11 @@ namespace FORWARD
 		float2* ray_planes,
 		float* ts,
 		float3* normals,
+		float* proj_2D,
+		float* conic_2D,
+		float* conic_2D_inv,
+		float* gs_per_pixel,
+		float* weight_per_gs_pixel,
 		float* cov3Ds,
 		float* rgb,
 		float4* conic_opacity,
@@ -78,6 +83,11 @@ namespace FORWARD
 		float* out_coord,
 		float* out_mcoord,
 		float* out_normal,
+		float* proj_2D,
+		float* conic_2D,
+		float* gs_per_pixel,
+		float* weight_per_gs_pixel,
+		float* x_mu,
 		float* out_depth,
 		float* out_mdepth,
 		float* accum_coord,
@@ -137,7 +147,8 @@ namespace FORWARD
 		float* out_alpha_integrated,
 		float* out_color_integrated,
 		float* out_coordinate2d,
-		float* out_sdf);
+		float* out_sdf
+		);
 }
 
 

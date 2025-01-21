@@ -329,6 +329,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float* camera_planes,
 	float2* ray_planes,
 	float3* normals,
+	float* proj_2D,
+	float* conic_2D,
+	float* conic_2D_inv,
+	float* gs_per_pixel,
+	float* weight_per_gs_pixel,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -417,6 +422,16 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	view_points[idx] = p_view;
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
+	proj_2D[idx*2 + 0] = ndc2Pix(p_proj.x, W);
+	proj_2D[idx*2 + 1] = ndc2Pix(p_proj.y, H);
+
+	conic_2D[idx*3 + 0] = conic.x;
+	conic_2D[idx*3 + 1] = conic.y;
+	conic_2D[idx*3 + 2] = conic.z;
+
+	conic_2D_inv[idx*3 + 0] = cov.x;
+	conic_2D_inv[idx*3 + 1] = cov.y;
+	conic_2D_inv[idx*3 + 2] = cov.z;
 	// Inverse 2D covariance and opacity neatly pack into one float4
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] * ceof};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
@@ -452,7 +467,12 @@ renderCUDA(
 	float* __restrict__ out_mdepth,
 	float* __restrict__ accum_coord,
 	float* __restrict__ accum_depth,
-	float* __restrict__ normal_length
+	float* __restrict__ normal_length,
+	float* __restrict__ proj_2D,
+	float* __restrict__ conic_2D,
+	float* __restrict__ gs_per_pixel,
+	float* __restrict__ weight_per_gs_pixel,
+	float* __restrict__ x_mu
 	)
 {
 	// Identify current tile and associated min/max pixel range.
@@ -714,6 +734,11 @@ void FORWARD::render(
 	float* out_coord,
 	float* out_mcoord,
 	float* out_normal,
+	float* proj_2D,
+	float* conic_2D,
+	float* gs_per_pixel,
+	float* weight_per_gs_pixel,
+	float* x_mu,
 	float* out_depth,
 	float* out_mdepth,
 	float* accum_coord,
@@ -726,7 +751,7 @@ void FORWARD::render(
 renderCUDA<NUM_CHANNELS, template_coord, template_depth, template_normal> <<<grid, block>>> ( \
 	ranges, point_list, W, H, view_points, means2D, colors, ts, camera_planes, ray_planes, \
 	normals, conic_opacity, focal_x, focal_y, out_alpha, n_contrib, bg_color, out_color, \
-	out_coord, out_mcoord, out_normal, out_depth, out_mdepth, \
+	out_coord, out_mcoord, out_normal, proj_2D, conic_2D, gs_per_pixel, weight_per_gs_pixel, x_mu, out_depth, out_mdepth, \
 	accum_coord, accum_depth, normal_length)
 
 	if (require_coord && require_depth)
@@ -766,6 +791,11 @@ void FORWARD::preprocess(int P, int D, int M,
 	float2* ray_planes,
 	float* ts,
 	float3* normals,
+	float* proj_2D,
+	float* conic_2D,
+	float* conic_2D_inv,
+	float* gs_per_pixel,
+	float* weight_per_gs_pixel,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -802,6 +832,11 @@ void FORWARD::preprocess(int P, int D, int M,
 			camera_planes,
 			ray_planes,
 			normals,
+			proj_2D,
+			conic_2D,
+			conic_2D_inv,
+			gs_per_pixel,
+			weight_per_gs_pixel,
 			cov3Ds,
 			rgb,
 			conic_opacity,
@@ -838,6 +873,11 @@ void FORWARD::preprocess(int P, int D, int M,
 			camera_planes,
 			ray_planes,
 			normals,
+			proj_2D,
+			conic_2D,
+			conic_2D_inv,
+			gs_per_pixel,
+			weight_per_gs_pixel,
 			cov3Ds,
 			rgb,
 			conic_opacity,

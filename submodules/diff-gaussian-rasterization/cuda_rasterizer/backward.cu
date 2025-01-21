@@ -154,6 +154,7 @@ __global__ void computeCov2DCUDA(int P,
 	const float2* dL_dcamera_planes,
 	const float2* dL_dray_planes,
 	const float* dL_dnormals,
+	const float* dL_conic_2D,
 	glm::vec3* dL_dmeans,
 	float* dL_dcov,
 	const float4* __restrict__ conic_opacity,
@@ -178,6 +179,9 @@ __global__ void computeCov2DCUDA(int P,
 	const float2 dL_camera_plane2 = dL_dcamera_planes[idx*3+2];
 
 	const float2 dL_dray_plane = dL_dray_planes[idx];
+
+	// from conic_2D directly
+	float3 dL_dconic2 = { dL_conic_2D[3 * idx], dL_conic_2D[3 * idx + 1], dL_conic_2D[3 * idx + 2] };
 
 	float3 t = transformPoint4x3(mean, view_matrix);
 	
@@ -575,6 +579,12 @@ __global__ void preprocessCUDA(
 	glm::vec3* dL_dmeans,
 	float* dL_dcolor,
 	const float* dL_dts,
+	float* dL_proj_2D,
+	float* dL_conic_2D,
+	float* dL_conic_2D_inv,
+	float* dummy_gs_per_pixel,
+	float* dummy_weight_per_gs_pixel,
+	float* grad_x_mu,
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
@@ -599,6 +609,14 @@ __global__ void preprocessCUDA(
 	dL_dmean1.y = (proj[4] * m_w - proj[7] * mul1) * dL_dmean2D[idx].x + (proj[5] * m_w - proj[7] * mul2) * dL_dmean2D[idx].y;
 	dL_dmean1.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2D[idx].x + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2D[idx].y;
 
+	// Compute loss gradient w.r.t. 3D means due to gradients of 2D means (dL_proj_2D)
+	// from rendering procedure
+	glm::vec3 dL_dmean2;
+	dL_dmean2.x = (proj[0] * m_w - proj[3] * mul1) * dL_proj_2D[idx*2 + 0] + (proj[1] * m_w - proj[3] * mul2) * dL_proj_2D[idx*2 + 1];
+	dL_dmean2.y = (proj[4] * m_w - proj[7] * mul1) * dL_proj_2D[idx*2 + 0] + (proj[5] * m_w - proj[7] * mul2) * dL_proj_2D[idx*2 + 1];
+	dL_dmean2.z = (proj[8] * m_w - proj[11] * mul1) * dL_proj_2D[idx*2 + 0] + (proj[9] * m_w - proj[11] * mul2) * dL_proj_2D[idx*2 + 1];
+
+
 	// the w must be equal to 1 for view^T * [x,y,z,1]
 	float3 m_view = transformPoint4x3(m, view);
 
@@ -607,15 +625,15 @@ __global__ void preprocessCUDA(
 
 	float3 dL_dview_point = dL_dview_points[idx];
 
-	float3 dL_dmean2 = transformVec4x3Transpose({dL_dview_point.x+m_view.x/t*dL_dt,
+	float3 dL_dmean3 = transformVec4x3Transpose({dL_dview_point.x+m_view.x/t*dL_dt,
 												dL_dview_point.y+m_view.y/t*dL_dt,
 												dL_dview_point.z+m_view.z/t*dL_dt}, view);
 
 	// That's the third part of the mean gradient.
 	dL_dmeans[idx] += glm::vec3(
-		dL_dmean1.x + dL_dmean2.x,
-		dL_dmean1.y + dL_dmean2.y,
-		dL_dmean1.z + dL_dmean2.z
+		dL_dmean1.x + dL_dmean2.x + dL_dmean3.x,
+		dL_dmean1.y + dL_dmean2.y + dL_dmean3.y,
+		dL_dmean1.z + dL_dmean2.z + dL_dmean3.z
 	);
 
 	// Compute gradient updates due to computing colors from SHs
@@ -667,7 +685,13 @@ renderCUDA(
 	float* __restrict__ dL_dts,
 	float* __restrict__ dL_dcamera_planes,
 	float2* __restrict__ dL_dray_planes,
-	float* __restrict__ dL_dnormals
+	float* __restrict__ dL_dnormals,
+	float* __restrict__ dL_proj_2D,
+	float* __restrict__ dL_conic_2D,
+	float* __restrict__ dL_conic_2D_inv,
+	float* __restrict__ dummy_gs_per_pixel,
+	float* __restrict__ dummy_weight_per_gs_pixel,
+	float* __restrict__ grad_x_mu
 )
 {
 	// We rasterize again. Compute necessary block info.
@@ -911,6 +935,12 @@ renderCUDA(
 					}
 				}
 
+				for (int ch_var = 0; ch_var < 20; ch_var++)
+				{
+					// atomicAdd(&(dummy_gs_per_pixel[global_id * 20 + ch_var]), 0.0);
+					atomicAdd(&(dummy_weight_per_gs_pixel[global_id * 20 + ch_var]), alpha * T);
+				}
+
 				atomicAdd(&(dL_dmean3D[global_id].x), dL_dcoords[0]);
 				atomicAdd(&(dL_dmean3D[global_id].y), dL_dcoords[1]);
 				atomicAdd(&(dL_dmean3D[global_id].z), dL_dcoords[2]);
@@ -1001,6 +1031,12 @@ renderCUDA(
 			}
 			atomicAdd(&dL_dmean2D[global_id].x, dL_ddelx * ddelx_dx);
 			atomicAdd(&dL_dmean2D[global_id].y, dL_ddely * ddely_dy);
+
+			// Update gradients w.r.t. 2D mean position of the Gaussian (proj_2D)
+			atomicAdd(&dL_proj_2D[global_id * 2 + 0], dL_dG * dG_ddelx * ddelx_dx);
+			atomicAdd(&dL_proj_2D[global_id * 2 + 1], dL_dG * dG_ddely * ddely_dy);
+			//atomicAdd(&dL_proj_2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+
 			// fork from GOF https://github.com/autonomousvision/gaussian-opacity-fields
 			const float abs_dL_dmean2D = abs(dL_dG * dG_ddelx * ddelx_dx) + abs(dL_dG * dG_ddely * ddely_dy);
             atomicAdd(&dL_dmean2D[global_id].z, abs_dL_dmean2D);
@@ -1008,6 +1044,11 @@ renderCUDA(
 			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
 			atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
 			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
+
+			// Update gradients w.r.t. 2D covariance (output to python interface) (same as dL_dconic2D)
+			atomicAdd(&dL_conic_2D[global_id * 3 + 0], -0.5f * gdx * d.x * dL_dG);
+			atomicAdd(&dL_conic_2D[global_id * 3 + 1], -0.5f * gdx * d.y * dL_dG);
+			atomicAdd(&dL_conic_2D[global_id * 3 + 2], -0.5f * gdy * d.y * dL_dG);
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			atomicAdd(&(dL_dopacity[global_id]), G * dL_dopa);
@@ -1040,6 +1081,12 @@ void BACKWARD::preprocess(
 	const float2* dL_dcamera_plane,
 	const float2* dL_dray_plane,
 	const float* dL_dnormals,
+	float* dL_proj_2D,
+	float* dL_conic_2D,
+	float* dL_conic_2D_inv,
+	float* dummy_gs_per_pixel,
+	float* dummy_weight_per_gs_pixel,
+	float* grad_x_mu,
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
@@ -1066,6 +1113,7 @@ void BACKWARD::preprocess(
 		dL_dcamera_plane,
 		dL_dray_plane,
 		dL_dnormals,
+		dL_conic_2D,
 		(glm::vec3*)dL_dmean3D,
 		dL_dcov3D,
 		conic_opacity,
@@ -1091,6 +1139,12 @@ void BACKWARD::preprocess(
 		(glm::vec3*)dL_dmean3D,
 		dL_dcolor,
 		dL_dts,
+		dL_proj_2D,
+		dL_conic_2D,
+		dL_conic_2D_inv,
+		dummy_gs_per_pixel,
+		dummy_weight_per_gs_pixel,
+		grad_x_mu,
 		dL_dcov3D,
 		dL_dsh,
 		dL_dscale,
@@ -1137,6 +1191,12 @@ void BACKWARD::render(
 	float* dL_dcamera_planes,
 	float2* dL_dray_planes,
 	float* dL_dnormals,
+	float* dL_proj_2D,
+	float* dL_conic_2D,
+	float* dL_conic_2D_inv,
+	float* dummy_gs_per_pixel,
+	float* dummy_weight_per_gs_pixel,
+	float* grad_x_mu,
 	bool require_coord,
 	bool require_depth)
 {
@@ -1148,7 +1208,8 @@ void BACKWARD::render(
         n_contrib, dL_dpixels, dL_dpixel_coords, dL_dpixel_mcoords, dL_dpixel_depth, \
         dL_dpixel_mdepth, dL_dalphas, dL_dpixel_normals, normalmap, \
         focal_x, focal_y, dL_dmean3D, dL_dmean2D, dL_dconic2D, dL_dopacity, dL_dcolors, \
-        dL_dts, dL_dcamera_planes, dL_dray_planes, dL_dnormals)
+        dL_dts, dL_dcamera_planes, dL_dray_planes, dL_dnormals, dL_proj_2D, dL_conic_2D, \
+	dL_conic_2D_inv, dummy_gs_per_pixel, dummy_weight_per_gs_pixel, grad_x_mu)
 
 	if (require_coord && require_depth)
 		RENDER_CUDA_CALL(true, true, true);
