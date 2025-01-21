@@ -55,6 +55,68 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                 view.load_image()
         time1 = time()
         render_pkg = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+
+        if True and view.frame_no != hyperparam.total_num_frames:
+            view.frame_no += 1
+            with torch.no_grad():
+                render_t_2 = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+            view.frame_no -= 1
+
+            # Gaussian parameters at t_1
+            proj_2D_t_1 = render_pkg["proj_2D"]
+            gs_per_pixel = render_pkg["gs_per_pixel"].long()
+            weight_per_gs_pixel = render_pkg["weight_per_gs_pixel"]
+            x_mu = render_pkg["x_mu"]
+            cov2D_inv_t_1 = render_pkg["conic_2D"].detach()
+
+            # Gaussian parameters at t_2
+            proj_2D_t_2 = render_t_2["proj_2D"]
+            cov2D_inv_t_2 = render_t_2["conic_2D"]
+            cov2D_t_2 = render_t_2["conic_2D_inv"]
+
+            cov2D_t_2_mtx = torch.zeros([cov2D_t_2.shape[0], 2, 2]).cuda()
+            cov2D_t_2_mtx[:, 0, 0] = cov2D_t_2[:, 0]
+            cov2D_t_2_mtx[:, 0, 1] = cov2D_t_2[:, 1]
+            cov2D_t_2_mtx[:, 1, 0] = cov2D_t_2[:, 1]
+            cov2D_t_2_mtx[:, 1, 1] = cov2D_t_2[:, 2]
+
+            cov2D_inv_t_1_mtx = torch.zeros([cov2D_inv_t_1.shape[0], 2, 2]).cuda()
+            cov2D_inv_t_1_mtx[:, 0, 0] = cov2D_inv_t_1[:, 0]
+            cov2D_inv_t_1_mtx[:, 0, 1] = cov2D_inv_t_1[:, 1]
+            cov2D_inv_t_1_mtx[:, 1, 0] = cov2D_inv_t_1[:, 1]
+            cov2D_inv_t_1_mtx[:, 1, 1] = cov2D_inv_t_1[:, 2]
+
+            # B_t_2
+            U_t_2 = torch.svd(cov2D_t_2_mtx)[0]
+            S_t_2 = torch.svd(cov2D_t_2_mtx)[1]
+            V_t_2 = torch.svd(cov2D_t_2_mtx)[2]
+            B_t_2 = torch.bmm(torch.bmm(U_t_2, torch.diag_embed(S_t_2)**(1/2)), V_t_2.transpose(1,2))
+
+            # B_t_1 ^(-1)
+            U_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[0]
+            S_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[1]
+            V_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[2]
+            B_inv_t_1 = torch.bmm(torch.bmm(U_inv_t_1, torch.diag_embed(S_inv_t_1)**(1/2)), V_inv_t_1.transpose(1,2))
+
+            # calculate B_t_2*B_inv_t_1
+            B_t_2_B_inv_t_1 = torch.bmm(B_t_2, B_inv_t_1)
+
+            # full formulation of GaussianFlow
+            cov_multi = (B_t_2_B_inv_t_1[gs_per_pixel] @ x_mu.permute(0,2,3,1).unsqueeze(-1).detach()).squeeze()
+            predicted_flow_by_gs = (cov_multi + proj_2D_t_2[gs_per_pixel] - proj_2D_t_1[gs_per_pixel].detach() - x_mu.permute(0,2,3,1).detach()) #* weight_per_gs_pixel.detach().unsqueeze(-1)
+
+            #TODO: remove (debug only)
+            if True:
+                # Map image space flow to RGB color
+                from utils import flow_viz
+                predicted_flow_by_gs_rgb = flow_viz.flow_to_image(predicted_flow_by_gs.sum(0).cpu().detach().numpy())
+
+                # Show Image
+                from PIL import Image
+                PIL_image = Image.fromarray(np.uint8(predicted_flow_by_gs_rgb))
+                PIL_image.show()
+                input("Press Enter to continue...")
+
         rendering = render_pkg["render"]
         normal_map = render_pkg["normal"]
         time2 = time()
