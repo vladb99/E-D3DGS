@@ -14,6 +14,7 @@ import torch
 from scene import Scene
 import os
 import cv2
+from PIL import Image
 from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
@@ -24,22 +25,24 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, OptimizationParams, get_combined_args, ModelHiddenParams
 from gaussian_renderer import GaussianModel
 from time import time
+from utils import gaussian_flow_utils
+from utils import flow_viz
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, kernel_size, hyperparam=None, disable_filter3D=True):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     shading_path = os.path.join(model_path, name, "ours_{}".format(iteration), "shading")
+    flow_path = os.path.join(model_path, name, "ours_{}".format(iteration), "flow")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
     makedirs(render_path, exist_ok=True)
     makedirs(shading_path, exist_ok=True)
+    makedirs(flow_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
     render_images = []
     shading_images = []
-    gt_list = []
-    render_list = []
-    deform_vertices = []
+    flow_images = []
 
     num_down_emb_c = hyperparam.min_embeddings
     num_down_emb_f = hyperparam.min_embeddings
@@ -56,67 +59,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         time1 = time()
         render_pkg = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
 
-        if True and view.frame_no != hyperparam.total_num_frames:
-            view.frame_no += 1
-            with torch.no_grad():
-                render_t_2 = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
-            view.frame_no -= 1
-
-            # Gaussian parameters at t_1
-            proj_2D_t_1 = render_pkg["proj_2D"]
-            gs_per_pixel = render_pkg["gs_per_pixel"].long()
-            weight_per_gs_pixel = render_pkg["weight_per_gs_pixel"]
-            x_mu = render_pkg["x_mu"]
-            cov2D_inv_t_1 = render_pkg["conic_2D"].detach()
-
-            # Gaussian parameters at t_2
-            proj_2D_t_2 = render_t_2["proj_2D"]
-            cov2D_inv_t_2 = render_t_2["conic_2D"]
-            cov2D_t_2 = render_t_2["conic_2D_inv"]
-
-            cov2D_t_2_mtx = torch.zeros([cov2D_t_2.shape[0], 2, 2]).cuda()
-            cov2D_t_2_mtx[:, 0, 0] = cov2D_t_2[:, 0]
-            cov2D_t_2_mtx[:, 0, 1] = cov2D_t_2[:, 1]
-            cov2D_t_2_mtx[:, 1, 0] = cov2D_t_2[:, 1]
-            cov2D_t_2_mtx[:, 1, 1] = cov2D_t_2[:, 2]
-
-            cov2D_inv_t_1_mtx = torch.zeros([cov2D_inv_t_1.shape[0], 2, 2]).cuda()
-            cov2D_inv_t_1_mtx[:, 0, 0] = cov2D_inv_t_1[:, 0]
-            cov2D_inv_t_1_mtx[:, 0, 1] = cov2D_inv_t_1[:, 1]
-            cov2D_inv_t_1_mtx[:, 1, 0] = cov2D_inv_t_1[:, 1]
-            cov2D_inv_t_1_mtx[:, 1, 1] = cov2D_inv_t_1[:, 2]
-
-            # B_t_2
-            U_t_2 = torch.svd(cov2D_t_2_mtx)[0]
-            S_t_2 = torch.svd(cov2D_t_2_mtx)[1]
-            V_t_2 = torch.svd(cov2D_t_2_mtx)[2]
-            B_t_2 = torch.bmm(torch.bmm(U_t_2, torch.diag_embed(S_t_2)**(1/2)), V_t_2.transpose(1,2))
-
-            # B_t_1 ^(-1)
-            U_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[0]
-            S_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[1]
-            V_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[2]
-            B_inv_t_1 = torch.bmm(torch.bmm(U_inv_t_1, torch.diag_embed(S_inv_t_1)**(1/2)), V_inv_t_1.transpose(1,2))
-
-            # calculate B_t_2*B_inv_t_1
-            B_t_2_B_inv_t_1 = torch.bmm(B_t_2, B_inv_t_1)
-
-            # full formulation of GaussianFlow
-            cov_multi = (B_t_2_B_inv_t_1[gs_per_pixel] @ x_mu.permute(0,2,3,1).unsqueeze(-1).detach()).squeeze()
-            predicted_flow_by_gs = (cov_multi + proj_2D_t_2[gs_per_pixel] - proj_2D_t_1[gs_per_pixel].detach() - x_mu.permute(0,2,3,1).detach()) #* weight_per_gs_pixel.detach().unsqueeze(-1)
-
-            #TODO: remove (debug only)
-            if True:
-                # Map image space flow to RGB color
-                from utils import flow_viz
-                predicted_flow_by_gs_rgb = flow_viz.flow_to_image(predicted_flow_by_gs.sum(0).cpu().detach().numpy())
-
-                # Show Image
-                from PIL import Image
-                PIL_image = Image.fromarray(np.uint8(predicted_flow_by_gs_rgb))
-                PIL_image.show()
-                input("Press Enter to continue...")
-
         rendering = render_pkg["render"]
         normal_map = render_pkg["normal"]
         time2 = time()
@@ -128,31 +70,25 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         shading_images.append(to8b(shading_image).transpose(1,2,0))
         torchvision.utils.save_image(shading_image, os.path.join(shading_path, '{0:05d}'.format(count) + ".png"))
 
-        # render_list.append(rendering)
+        view.frame_no += 1
+        render_pkg_t_2 = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+        view.frame_no -= 1
+        predicted_flow_by_gs = gaussian_flow_utils.predict(render_pkg, render_pkg_t_2)
+        flow_image = Image.fromarray(np.uint8(flow_viz.flow_to_image(predicted_flow_by_gs.sum(0).cpu().detach().numpy())))
+        flow_images.append(flow_image)
+        flow_image.save(os.path.join(flow_path, '{0:05d}'.format(count) + ".png"))
+
 
         if name in ["train", "test"]:
             gt = view.original_image[0:3, :, :]
             torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(count) + ".png"))
-            # gt_list.append(gt)
         count +=1
 
     print("FPS:",(len(views)-1)/total_time)
 
-    # count = 0
-    # print("writing training images.")
-    # if len(gt_list) != 0:
-    #     for image in tqdm(gt_list):
-    #         torchvision.utils.save_image(image, os.path.join(gts_path, '{0:05d}'.format(count) + ".png"))
-    #         count+=1
-    # count = 0
-    # print("writing rendering images.")
-    # if len(render_list) != 0:
-    #     for image in tqdm(render_list):
-    #         torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(count) + ".png"))
-    #         count +=1
-
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=30, quality=8)
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'shading.mp4'), shading_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'flow.mp4'), flow_images, fps=30, quality=8)
 
 
 def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, skip_video: bool):
