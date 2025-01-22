@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 
 def predict(render_pkg_t1, render_pkg_t2):
