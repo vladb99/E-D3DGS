@@ -35,6 +35,7 @@ from time import time
 from utils.graphics_utils import depth_double_to_normal, point_double_to_normal
 from utils.train_utils import sample_sequential_frame_n_camera, sample_first_frame_then_sequential, \
     sample_frame_with_preference
+from utils import gaussian_flow_utils
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -169,7 +170,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         cam_no_list, frame_no_list = [], []
         reg_kick_on = iteration >= opt.radegs_regularization_from_iter
         for viewpoint_cam in viewpoint_cams:
-            if type(viewpoint_cam.original_image) == type(None):
+            if type(viewpoint_cam.original_image) == type(None) or type(viewpoint_cam.flow_uv) == type(None):
                 viewpoint_cam.load_image()  # for lazy loading (to avoid OOM issue)
             cam_no = viewpoint_cam.cam_no
             frame_no = viewpoint_cam.frame_no
@@ -195,60 +196,8 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                     render_t_2 = render(viewpoint_cam, gaussians, pipe, background, kernel_size, require_coord=require_coord and reg_kick_on, require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration, num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings, disable_filter3D=dataset.disable_filter3D)
                 viewpoint_cam.frame_no -= 1
 
-                # Gaussian parameters at t_1
-                proj_2D_t_1 = render_pkg["proj_2D"]
-                gs_per_pixel = render_pkg["gs_per_pixel"].long()
-                weight_per_gs_pixel = render_pkg["weight_per_gs_pixel"]
-                x_mu = render_pkg["x_mu"]
-                cov2D_inv_t_1 = render_pkg["conic_2D"].detach()
-
-                # Gaussian parameters at t_2
-                proj_2D_t_2 = render_t_2["proj_2D"]
-                cov2D_inv_t_2 = render_t_2["conic_2D"]
-                cov2D_t_2 = render_t_2["conic_2D_inv"]
-
-                cov2D_t_2_mtx = torch.zeros([cov2D_t_2.shape[0], 2, 2]).cuda()
-                cov2D_t_2_mtx[:, 0, 0] = cov2D_t_2[:, 0]
-                cov2D_t_2_mtx[:, 0, 1] = cov2D_t_2[:, 1]
-                cov2D_t_2_mtx[:, 1, 0] = cov2D_t_2[:, 1]
-                cov2D_t_2_mtx[:, 1, 1] = cov2D_t_2[:, 2]
-
-                cov2D_inv_t_1_mtx = torch.zeros([cov2D_inv_t_1.shape[0], 2, 2]).cuda()
-                cov2D_inv_t_1_mtx[:, 0, 0] = cov2D_inv_t_1[:, 0]
-                cov2D_inv_t_1_mtx[:, 0, 1] = cov2D_inv_t_1[:, 1]
-                cov2D_inv_t_1_mtx[:, 1, 0] = cov2D_inv_t_1[:, 1]
-                cov2D_inv_t_1_mtx[:, 1, 1] = cov2D_inv_t_1[:, 2]
-
-                # B_t_2
-                U_t_2 = torch.svd(cov2D_t_2_mtx)[0]
-                S_t_2 = torch.svd(cov2D_t_2_mtx)[1]
-                V_t_2 = torch.svd(cov2D_t_2_mtx)[2]
-                B_t_2 = torch.bmm(torch.bmm(U_t_2, torch.diag_embed(S_t_2)**(1/2)), V_t_2.transpose(1,2))
-
-                # B_t_1 ^(-1)
-                U_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[0]
-                S_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[1]
-                V_inv_t_1 = torch.svd(cov2D_inv_t_1_mtx)[2]
-                B_inv_t_1 = torch.bmm(torch.bmm(U_inv_t_1, torch.diag_embed(S_inv_t_1)**(1/2)), V_inv_t_1.transpose(1,2))
-
-                # calculate B_t_2*B_inv_t_1
-                B_t_2_B_inv_t_1 = torch.bmm(B_t_2, B_inv_t_1)
-
-                # full formulation of GaussianFlow
-                cov_multi = (B_t_2_B_inv_t_1[gs_per_pixel] @ x_mu.permute(0,2,3,1).unsqueeze(-1).detach()).squeeze()
-                predicted_flow_by_gs = (cov_multi + proj_2D_t_2[gs_per_pixel] - proj_2D_t_1[gs_per_pixel].detach() - x_mu.permute(0,2,3,1).detach()) #* weight_per_gs_pixel.detach().unsqueeze(-1)
-
-                #TODO: remove (debug only)
-                if False:
-                    # Map image space flow to RGB color
-                    from utils import flow_viz
-                    predicted_flow_by_gs_rgb = flow_viz.flow_to_image(predicted_flow_by_gs.sum(0).cpu().detach().numpy())
-
-                    # Show Image
-                    from PIL import Image
-                    PIL_image = Image.fromarray(np.uint8(predicted_flow_by_gs_rgb))
-                    PIL_image.show()
-                    input("Press Enter to continue...")
+                predicted_flow_by_gs = gaussian_flow_utils.predict(render_pkg, render_t_2)
+                # TODO: store predicted_flow_by_gs in list, so that we don't have to rely on batch size 1
 
             images.append(image.unsqueeze(0))
             gt_image = viewpoint_cam.original_image.cuda()
@@ -305,6 +254,32 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             second_difference = first_difference[1:,:] - first_difference[N-2,:]
             temporal_loss = torch.square(second_difference).mean()
             loss += opt.coef_tv_temporal_embedding * temporal_loss
+            
+        # flow supervision loss
+        flow_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
+        if iteration >= hyper.deform_from_iter:
+            # TODO: move to parameters
+            flow_thresh = 0.1 # flow_thresh = 0.1 or other value to filter out noise, here we assume that we have already loaded pre-computed optical flow somewhere as pseudo GT
+            flow_weight = 1 # flow_weight could be 1, 0.1, ... whatever you want.
+
+            large_motion_msk = torch.norm(viewpoint_cam.flow_uv.cuda(), p=2, dim=-1) >= flow_thresh
+            flow_loss = torch.norm((viewpoint_cam.flow_uv.cuda() - predicted_flow_by_gs.sum(0))[large_motion_msk], p=2, dim=-1).mean()
+            loss += flow_weight * flow_loss
+            
+            #TODO: remove (debug only)
+            if False:
+                # Map image space flow to RGB color and show image
+                from utils import flow_viz
+                from PIL import Image
+                
+                PIL_image = Image.fromarray(np.uint8(large_motion_msk.cpu().detach().numpy()))
+                PIL_image.show()
+                input("Press Enter to continue...")
+                
+                predicted_flow_by_gs_rgb = flow_viz.flow_to_image(predicted_flow_by_gs.sum(0).cpu().detach().numpy())
+                PIL_image = Image.fromarray(np.uint8(predicted_flow_by_gs_rgb))
+                PIL_image.show()
+                input("Press Enter to continue...")
 
         # TODO make it work for batched version. This is loss is currently computed using last assigned viewpoint_cam
         ### Depth normal loss from RaDe-GS
@@ -364,7 +339,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             # Log and save
             timer.pause()
 
-            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss, total_point, Lssim, temporal_loss, embedding_loss, opacity_mean_loss)
+            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss, total_point, Lssim, temporal_loss, embedding_loss, opacity_mean_loss, flow_loss)
 
             if (tb_writer and (iteration % 100 == 0)):
                 test_cam = np.random.choice(test_cams)
@@ -487,7 +462,7 @@ def setup_seed(seed):
      torch.backends.cudnn.deterministic = True
 
 
-def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss, total_points, dssim_loss, temporal_loss, embedding_loss, opacity_mean_loss):
+def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss, total_points, dssim_loss, temporal_loss, embedding_loss, opacity_mean_loss, flow_loss):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/normal_loss', normal_loss.item(), iteration)
@@ -496,6 +471,7 @@ def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss,
         tb_writer.add_scalar('train_loss_patches/temporal_loss', temporal_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/embedding_loss', embedding_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/opacity_mean_loss', opacity_mean_loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/flow_loss', flow_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/psnr', psnr, iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
         tb_writer.add_scalar('total_points', total_points, iteration)
