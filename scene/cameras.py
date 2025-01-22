@@ -37,6 +37,7 @@ class Camera(nn.Module):
         self.time = timestamp
         self.cam_no = cam_no
         self.frame_no = frame_no
+        self.flow_uv = None
 
         self.transform = transforms.ToTensor()
         self.gt_alpha_mask = gt_alpha_mask
@@ -153,7 +154,6 @@ class MiniCam:
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
 
-
 class Camerass(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
@@ -192,7 +192,6 @@ class Camerass(nn.Module):
             self.image_width = image[0] 
             self.image_height = image[1] 
             self.original_image = None
-            self.flow_uv = None
         
         self.image_width = 2 * self.image_width
         self.image_height = 2 * self.image_height # 
