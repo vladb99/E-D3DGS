@@ -2,6 +2,8 @@ import numpy as np
 import torch
 
 def predict(render_pkg_t1, render_pkg_t2):
+    # Gaussian flow prediction from https://github.com/Zerg-Overmind/GaussianFlow
+
     # Gaussian parameters at t_1
     proj_2D_t_1 = render_pkg_t1["proj_2D"]
     gs_per_pixel = render_pkg_t1["gs_per_pixel"].long()
