@@ -333,20 +333,27 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
 
                     gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-                if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
 
-                    gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-
-                    # # From RaDe-GS
+                    # From RaDe-GS
                     if dataset.disable_filter3D:
                         gaussians.reset_3D_filter()
                     else:
                         gaussians.compute_3D_filter(cameras=train_cams)
-                    # ###
-
-                    if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
-                        gaussians.reset_opacity(opt.reset_opacity_ratio)
+                    ###
+                # if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
+                #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                #
+                #     gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
+                #
+                #     # # From RaDe-GS
+                #     if dataset.disable_filter3D:
+                #         gaussians.reset_3D_filter()
+                #     else:
+                #         gaussians.compute_3D_filter(cameras=train_cams)
+                #     # ###
+                #
+                #     if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
+                #         gaussians.reset_opacity(opt.reset_opacity_ratio)
 
             # ### From RaDe-GS
             if iteration % 100 == 0 and iteration > opt.densify_until_iter and not dataset.disable_filter3D:
