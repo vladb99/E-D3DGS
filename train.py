@@ -260,7 +260,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         if iteration >= hyper.deform_from_iter:
             # TODO: move to parameters
             flow_thresh = 0.1 # flow_thresh = 0.1 or other value to filter out noise, here we assume that we have already loaded pre-computed optical flow somewhere as pseudo GT
-            flow_weight = 1 # flow_weight could be 1, 0.1, ... whatever you want.
+            flow_weight = 0.1 # flow_weight could be 1, 0.1, ... whatever you want.
 
             large_motion_msk = torch.norm(viewpoint_cam.flow_uv.cuda(), p=2, dim=-1) >= flow_thresh
             flow_loss = torch.norm((viewpoint_cam.flow_uv.cuda() - predicted_flow_by_gs.sum(0))[large_motion_msk], p=2, dim=-1).mean()
@@ -272,7 +272,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 from utils import flow_viz
                 from PIL import Image
                 
-                PIL_image = Image.fromarray(np.uint8(large_motion_msk.cpu().detach().numpy()))
+                PIL_image = Image.fromarray(np.uint8(large_motion_msk.cpu().detach().numpy()*255))
                 PIL_image.show()
                 input("Press Enter to continue...")
                 
