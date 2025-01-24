@@ -201,6 +201,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.view_points, P * 3, 128);
 	obtain(chunk, geom.cov3D, P * 6, 128);
 	obtain(chunk, geom.conic_opacity, P, 128);
+	obtain(chunk, geom.is_tongue, P, 128);
 	obtain(chunk, geom.rgb, P * 3, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
@@ -262,6 +263,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* shs,
 	const float* colors_precomp,
 	const float* opacities,
+	const float* tongue_class,
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
@@ -278,6 +280,7 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_depth,
 	float* out_mdepth,
 	float* out_alpha,
+	float* out_tongue,
 	float* out_normal,
 	int* radii,
 	bool require_coord,
@@ -311,13 +314,14 @@ int CudaRasterizer::Rasterizer::forward(
 	}
 
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
-	CHECK_CUDA(FORWARD::preprocess(
+	CHECK_CUDA(FORWARD::preprocessTongue(
 		P, D, M,
 		means3D,
 		(glm::vec3*)scales,
 		scale_modifier,
 		(glm::vec4*)rotations,
 		opacities,
+		tongue_class,
 		shs,
 		geomState.clamped,
 		cov3D_precomp,
@@ -339,6 +343,7 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
+        geomState.is_tongue,
 		tile_grid,
 		geomState.tiles_touched,
 		false,
@@ -405,8 +410,10 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.ray_planes,
 		geomState.normals,
 		geomState.conic_opacity,
+		geomState.is_tongue,
 		focal_x, focal_y,
 		out_alpha,
+		out_tongue,
 		imgState.n_contrib,
 		background,
 		out_color,

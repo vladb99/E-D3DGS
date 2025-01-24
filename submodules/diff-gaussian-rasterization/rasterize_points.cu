@@ -32,12 +32,13 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
     const torch::Tensor& colors,
     const torch::Tensor& opacity,
+    const torch::Tensor& tongue_class,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const float scale_modifier,
@@ -74,6 +75,7 @@ RasterizeGaussiansCUDA(
   torch::Tensor out_coord = torch::full({3, H, W}, 0.0, float_opts);
   torch::Tensor out_mcoord = torch::full({3, H, W}, 0.0, float_opts);
   torch::Tensor out_alpha = torch::full({1, H, W}, 0.0, float_opts);
+  torch::Tensor out_tongue = torch::full({1, H, W}, 0.0, float_opts);
   torch::Tensor out_normal = torch::full({3, H, W}, 0.0, float_opts);
   torch::Tensor radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
   
@@ -105,7 +107,8 @@ RasterizeGaussiansCUDA(
 		means3D.contiguous().data<float>(),
 		sh.contiguous().data_ptr<float>(),
 		colors.contiguous().data<float>(), 
-		opacity.contiguous().data<float>(), 
+		opacity.contiguous().data<float>(),
+		tongue_class.contiguous().data<float>(),
 		scales.contiguous().data_ptr<float>(),
 		scale_modifier,
 		rotations.contiguous().data_ptr<float>(),
@@ -123,13 +126,14 @@ RasterizeGaussiansCUDA(
 		out_depth.contiguous().data<float>(),
 		out_mdepth.contiguous().data<float>(),
 		out_alpha.contiguous().data<float>(),
+		out_tongue.contiguous().data<float>(),
 		out_normal.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
 		require_coord,
 		require_depth,
 		debug);
   }
-  return std::make_tuple(rendered, out_color, out_coord, out_mcoord, out_alpha, out_normal, out_depth, out_mdepth, radii, geomBuffer, binningBuffer, imgBuffer);
+  return std::make_tuple(rendered, out_color, out_coord, out_mcoord, out_alpha, out_tongue, out_normal, out_depth, out_mdepth, radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>

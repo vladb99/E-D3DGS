@@ -97,17 +97,19 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     # time3 = get_time()
     depth = None
+    tongue_class = torch.ones_like(opacity)
     outputs = rasterizer(
         means3D = means3D_final,
         means2D = means2D,
         shs = shs_final,
         colors_precomp = colors_precomp,
         opacities = opacity,
+        tongue_class = tongue_class,
         scales = scales_final,
         rotations = rotations_final,
         cov3D_precomp = cov3D_precomp)
     if len(outputs) == 8:
-        rendered_image, radii, rendered_expected_coord, rendered_median_coord, rendered_expected_depth, rendered_median_depth, rendered_alpha, rendered_normal = outputs
+        rendered_image, radii, rendered_expected_coord, rendered_median_coord, rendered_expected_depth, rendered_median_depth, rendered_alpha, rendered_tongue, rendered_normal = outputs
     else:
         assert False, "only (depth-)diff-gaussian-rasterization from RaDe-GS supported!"
     # time4 = get_time()
@@ -136,6 +138,7 @@ def render(viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, ke
             "normal": rendered_normal,
             "sh_coefs_final": shs_final,
             "extras": extras,
+            "deformed_gaussian_positions": means3D_final,
     }
 
 def render_old(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, cam_no=None, iter=None, train_coarse=False, \

@@ -422,6 +422,128 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
 
+// Perform initial steps for each Gaussian prior to rasterization.
+template<int C, bool INTE = false>
+__global__ void preprocessCUDATongue(int P, int D, int M,
+	const float* orig_points,
+	const glm::vec3* scales,
+	const float scale_modifier,
+	const glm::vec4* rotations,
+	const float* opacities,
+	const float* tongue_class,
+	const float* shs,
+	bool* clamped,
+	const float* cov3D_precomp,
+	const float* colors_precomp,
+	const float* viewmatrix,
+	const float* projmatrix,
+	const glm::vec3* cam_pos,
+	const int W, int H,
+	const float tan_fovx, float tan_fovy,
+	const float focal_x, float focal_y,
+	const float kernel_size,
+	int* radii,
+	float2* points_xy_image,
+	float3* view_points,
+	float* depths,
+	float* camera_planes,
+	float2* ray_planes,
+	float3* normals,
+	float* cov3Ds,
+	float* rgb,
+	float4* conic_opacity,
+	float* is_tongue,
+	const dim3 grid,
+	uint32_t* tiles_touched,
+	bool prefiltered,
+	float* invraycov3Ds,
+	float* ts,
+	bool* conditions)
+{
+	auto idx = cg::this_grid().thread_rank();
+	if (idx >= P)
+		return;
+
+	// Initialize radius and touched tiles to 0. If this isn't changed,
+	// this Gaussian will not be processed further.
+	radii[idx] = 0;
+	tiles_touched[idx] = 0;
+	// Perform near culling, quit if outside.
+	float3 p_view;
+	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+		return;
+	// Transform point by projecting
+	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
+	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
+	float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+
+	// If 3D covariance matrix is precomputed, use it, otherwise compute
+	// from scaling and rotation parameters.
+	const float* cov3D;
+	if (cov3D_precomp != nullptr)
+	{
+		cov3D = cov3D_precomp + idx * 6;
+	}
+	else
+	{
+		computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
+		cov3D = cov3Ds + idx * 6;
+	}
+
+	// Compute 2D screen-space covariance matrix
+	float cov2D[3];
+	float ceof;
+	bool condition = computeCov2D<INTE>(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, kernel_size, cov3D, viewmatrix, cov2D, camera_planes + idx * 6, normals + idx, ray_planes + idx, ceof, invraycov3Ds + idx * 6);
+	if constexpr (INTE)
+	{
+		conditions[idx] = condition;
+	}
+	ts[idx] = sqrt(p_view.x*p_view.x+p_view.y*p_view.y+p_view.z*p_view.z);
+	const float3 cov = {cov2D[0], cov2D[1], cov2D[2]};
+
+	// Invert covariance (EWA algorithm)
+	float det = (cov.x * cov.z - cov.y * cov.y);
+	if (det == 0.0f)
+		return;
+	float det_inv = 1.f / det;
+	float3 conic = { cov.z * det_inv, -cov.y * det_inv, cov.x * det_inv };
+
+	// Compute extent in screen space (by finding eigenvalues of
+	// 2D covariance matrix). Use extent to compute a bounding rectangle
+	// of screen-space tiles that this Gaussian overlaps with. Quit if
+	// rectangle covers 0 tiles.
+	float mid = 0.5f * (cov.x + cov.z);
+	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
+	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
+	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
+	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
+	uint2 rect_min, rect_max;
+	getRect(point_image, my_radius, rect_min, rect_max, grid);
+	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
+		return;
+
+	// If colors have been precomputed, use them, otherwise convert
+	// spherical harmonics coefficients to RGB color.
+	if (colors_precomp == nullptr)
+	{
+		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+		rgb[idx * C + 0] = result.x;
+		rgb[idx * C + 1] = result.y;
+		rgb[idx * C + 2] = result.z;
+	}
+
+	// Store some useful helper data for the next steps.
+	depths[idx] = p_view.z;
+	view_points[idx] = p_view;
+	radii[idx] = my_radius;
+	points_xy_image[idx] = point_image;
+	// Inverse 2D covariance and opacity neatly pack into one float4
+	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] * ceof};
+	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
+	is_tongue[idx] = tongue_class[idx];
+}
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -439,9 +561,11 @@ renderCUDA(
 	const float2* __restrict__ ray_planes,
 	const float3* __restrict__ normals,
 	const float4* __restrict__ conic_opacity,
+	const float* __restrict__ is_tongue,
 	const float focal_x, 
 	const float focal_y,
 	float* __restrict__ out_alpha,
+	float* __restrict__ out_tongue,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
@@ -488,6 +612,7 @@ renderCUDA(
 	__shared__ float collected_ts[BLOCK_SIZE];
 	__shared__ float2 collected_ray_planes[BLOCK_SIZE];
 	__shared__ float3 collected_normals[BLOCK_SIZE];
+	__shared__ float collected_tongue[BLOCK_SIZE];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -495,6 +620,7 @@ renderCUDA(
 	uint32_t last_contributor = 0;
 	uint32_t max_contributor = -1;
 	float C[CHANNELS] = { 0 };
+	float tongue = 0;
 	float weight = 0;
 	float Coord[3] = { 0 };
 	float mCoord[3] = { 0 };
@@ -522,6 +648,7 @@ renderCUDA(
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			for(int ch = 0; ch < CHANNELS; ch++)
 				collected_feature[ch * BLOCK_SIZE + block.thread_rank()] = features[coll_id * CHANNELS + ch];
+            collected_tongue[block.thread_rank()] = is_tongue[coll_id];
 			if constexpr (COORD)
 			{
 				for(int ch = 0; ch < 6; ch++)
@@ -576,6 +703,7 @@ renderCUDA(
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += collected_feature[j + BLOCK_SIZE * ch] * aT;
+            tongue += collected_tongue[j] * aT;
 
 			bool before_median = T > 0.5;
 			if constexpr (COORD)
@@ -634,6 +762,7 @@ renderCUDA(
 		n_contrib[pix_id + H * W] = max_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+        out_tongue[pix_id] = tongue;
 		out_alpha[pix_id] = weight; //1 - T;
 
 		if constexpr (COORD)
@@ -706,8 +835,10 @@ void FORWARD::render(
 	const float2* ray_planes,
 	const float3* normals,
 	const float4* conic_opacity,
+	const float* is_tongue,
 	const float focal_x, float focal_y,
 	float* out_alpha,
+	float* out_tongue,
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
@@ -725,7 +856,7 @@ void FORWARD::render(
 #define RENDER_CUDA_CALL(template_coord, template_depth, template_normal) \
 renderCUDA<NUM_CHANNELS, template_coord, template_depth, template_normal> <<<grid, block>>> ( \
 	ranges, point_list, W, H, view_points, means2D, colors, ts, camera_planes, ray_planes, \
-	normals, conic_opacity, focal_x, focal_y, out_alpha, n_contrib, bg_color, out_color, \
+	normals, conic_opacity, is_tongue, focal_x, focal_y, out_alpha, out_tongue, n_contrib, bg_color, out_color, \
 	out_coord, out_mcoord, out_normal, out_depth, out_mdepth, \
 	accum_coord, accum_depth, normal_length)
 
@@ -776,78 +907,118 @@ void FORWARD::preprocess(int P, int D, int M,
 	float* invraycov3Ds,
 	bool* condition)
 {
-	if(integrate)
-		preprocessCUDA<NUM_CHANNELS, true> << <(P + 255) / 256, 256 >> > (
-			P, D, M,
-			means3D,
-			scales,
-			scale_modifier,
-			rotations,
-			opacities,
-			shs,
-			clamped,
-			cov3D_precomp,
-			colors_precomp,
-			viewmatrix, 
-			projmatrix,
-			cam_pos,
-			W, H,
-			tan_fovx, tan_fovy,
-			focal_x, focal_y,
-			kernel_size,
-			radii,
-			means2D,
-			view_points,
-			depths,
-			camera_planes,
-			ray_planes,
-			normals,
-			cov3Ds,
-			rgb,
-			conic_opacity,
-			grid,
-			tiles_touched,
-			prefiltered,
-			invraycov3Ds,
-			ts,
-			condition
-			);
-	else
-		preprocessCUDA<NUM_CHANNELS, false> << <(P + 255) / 256, 256 >> > (
-			P, D, M,
-			means3D,
-			scales,
-			scale_modifier,
-			rotations,
-			opacities,
-			shs,
-			clamped,
-			cov3D_precomp,
-			colors_precomp,
-			viewmatrix, 
-			projmatrix,
-			cam_pos,
-			W, H,
-			tan_fovx, tan_fovy,
-			focal_x, focal_y,
-			kernel_size,
-			radii,
-			means2D,
-			view_points,
-			depths,
-			camera_planes,
-			ray_planes,
-			normals,
-			cov3Ds,
-			rgb,
-			conic_opacity,
-			grid,
-			tiles_touched,
-			prefiltered,
-			invraycov3Ds,
-			ts,
-			condition
-			);
+    preprocessCUDA<NUM_CHANNELS, true> << <(P + 255) / 256, 256 >> > (
+        P, D, M,
+        means3D,
+        scales,
+        scale_modifier,
+        rotations,
+        opacities,
+        shs,
+        clamped,
+        cov3D_precomp,
+        colors_precomp,
+        viewmatrix,
+        projmatrix,
+        cam_pos,
+        W, H,
+        tan_fovx, tan_fovy,
+        focal_x, focal_y,
+        kernel_size,
+        radii,
+        means2D,
+        view_points,
+        depths,
+        camera_planes,
+        ray_planes,
+        normals,
+        cov3Ds,
+        rgb,
+        conic_opacity,
+        grid,
+        tiles_touched,
+        prefiltered,
+        invraycov3Ds,
+        ts,
+        condition
+        );
+}
+
+void FORWARD::preprocessTongue(int P, int D, int M,
+	const float* means3D,
+	const glm::vec3* scales,
+	const float scale_modifier,
+	const glm::vec4* rotations,
+	const float* opacities,
+	const float* tongue_class,
+	const float* shs,
+	bool* clamped,
+	const float* cov3D_precomp,
+	const float* colors_precomp,
+	const float* viewmatrix,
+	const float* projmatrix,
+	const glm::vec3* cam_pos,
+	const int W, int H,
+	const float focal_x, float focal_y,
+	const float tan_fovx, float tan_fovy,
+	const float kernel_size,
+	int* radii,
+	float2* means2D,
+	float3* view_points,
+	float* depths,
+	float* camera_planes,
+	float2* ray_planes,
+	float* ts,
+	float3* normals,
+	float* cov3Ds,
+	float* rgb,
+	float4* conic_opacity,
+	float* is_tongue,
+	const dim3 grid,
+	uint32_t* tiles_touched,
+	bool prefiltered,
+	bool integrate,
+	float* invraycov3Ds,
+	bool* condition)
+{
+
+    preprocessCUDATongue<NUM_CHANNELS, false> << <(P + 255) / 256, 256 >> > (
+        P, D, M,
+        means3D,
+        scales,
+        scale_modifier,
+        rotations,
+        opacities,
+        tongue_class,
+        shs,
+        clamped,
+        cov3D_precomp,
+        colors_precomp,
+        viewmatrix,
+        projmatrix,
+        cam_pos,
+        W, H,
+        tan_fovx, tan_fovy,
+        focal_x, focal_y,
+        kernel_size,
+        radii,
+        means2D,
+        view_points,
+        depths,
+        camera_planes,
+        ray_planes,
+        normals,
+        cov3Ds,
+        rgb,
+        conic_opacity,
+        is_tongue,
+        grid,
+        tiles_touched,
+        prefiltered,
+        invraycov3Ds,
+        ts,
+        condition
+        );
 }
 
 
