@@ -34,7 +34,7 @@ from utils.scene_utils import render_training_image
 from time import time
 from utils.graphics_utils import depth_double_to_normal, point_double_to_normal
 from utils.train_utils import sample_sequential_frame_n_camera, sample_first_frame_then_sequential, \
-    sample_frame_with_preference
+    sample_frame_with_preference, compute_closest_distances_2_gaussians, compute_closest_distances_2_gaussians_tensor
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -262,6 +262,27 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         loss += depth_normal_loss * lambda_depth_normal
         ###
 
+        colmap_pcd_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
+        # if iteration > hyper.deform_from_iter: #and (iteration % 100 == 0):
+        #     # Colmap point cloud supervision
+        #     frame_number = int(viewpoint_cam.image_path.split("/")[-1].split(".")[0])
+        #     frame_name = "{:05}".format(frame_number * 3)
+        #     pcd_path = os.path.join("/home/vbratulescu/Downloads/407-tongue-annotations/407/sequences/EXP-6-tongue-1/timesteps/frame_" + frame_name, "colmap", "pointclouds", "pointcloud_16.pcd")
+        #
+        #     # Debug
+        #     # /home/vbratulescu/git/data/Nersemble_processed/407/EXP-6-tongue-1/images/cam09/0064.png
+        #     # /home/vbratulescu/Downloads/407-tongue-annotations/407/sequences/EXP-6-tongue-1/timesteps/frame_00000/colmap/pointclouds/pointcloud_16.pcd
+        #     # print(viewpoint_cam.image_path)
+        #     # print(pcd_path)
+        #
+        #     gaussian_positions = render_pkg["deformed_gaussian_positions"]
+        #     closest_distances = compute_closest_distances_2_gaussians_tensor(gaussian_positions, pcd_path)
+        #
+        #     if True:
+        #         colmap_pcd_loss = closest_distances.mean()
+        #         closest_distance_coef = 100
+        #         loss += closest_distance_coef * colmap_pcd_loss
+
         loss.backward()
         viewspace_point_tensor_grad = torch.zeros_like(viewspace_point_tensor)
         for idx in range(0, len(viewspace_point_tensor_list)):
@@ -293,7 +314,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             # Log and save
             timer.pause()
 
-            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss, total_point, Lssim, temporal_loss, embedding_loss, opacity_mean_loss)
+            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss, total_point, Lssim, temporal_loss, embedding_loss, opacity_mean_loss, colmap_pcd_loss)
 
             if (tb_writer and (iteration % 100 == 0)):
                 test_cam = np.random.choice(test_cams)
@@ -334,26 +355,26 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
                     gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
 
-                    # From RaDe-GS
+                    # # From RaDe-GS
+                    # if dataset.disable_filter3D:
+                    #     gaussians.reset_3D_filter()
+                    # else:
+                    #     gaussians.compute_3D_filter(cameras=train_cams)
+                    # ###
+                if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
+                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                
+                    gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
+                
+                    # # From RaDe-GS
                     if dataset.disable_filter3D:
                         gaussians.reset_3D_filter()
                     else:
                         gaussians.compute_3D_filter(cameras=train_cams)
-                    ###
-                # if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
-                #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                #
-                #     gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-                #
-                #     # # From RaDe-GS
-                #     if dataset.disable_filter3D:
-                #         gaussians.reset_3D_filter()
-                #     else:
-                #         gaussians.compute_3D_filter(cameras=train_cams)
-                #     # ###
-                #
-                #     if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
-                #         gaussians.reset_opacity(opt.reset_opacity_ratio)
+                    # ###
+                
+                    if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
+                        gaussians.reset_opacity(opt.reset_opacity_ratio)
 
             # ### From RaDe-GS
             if iteration % 100 == 0 and iteration > opt.densify_until_iter and not dataset.disable_filter3D:
@@ -423,7 +444,7 @@ def setup_seed(seed):
      torch.backends.cudnn.deterministic = True
 
 
-def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss, total_points, dssim_loss, temporal_loss, embedding_loss, opacity_mean_loss):
+def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss, total_points, dssim_loss, temporal_loss, embedding_loss, opacity_mean_loss, colmap_pcd_loss):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/normal_loss', normal_loss.item(), iteration)
@@ -433,6 +454,7 @@ def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss,
         tb_writer.add_scalar('train_loss_patches/embedding_loss', embedding_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/opacity_mean_loss', opacity_mean_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/psnr', psnr, iteration)
+        tb_writer.add_scalar('train_loss_patches/colmap_pcd_loss', colmap_pcd_loss, iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
         tb_writer.add_scalar('total_points', total_points, iteration)
 

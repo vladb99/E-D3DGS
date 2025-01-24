@@ -1,4 +1,7 @@
 import numpy as np
+from sklearn.neighbors import KDTree
+import open3d as o3d
+import torch
 
 def sample_first_frame_then_sequential(dataset, scene, opt, viewpoint_stack, iteration, final_iter):
     if iteration <= dataset.sampling_first_frame_change:
@@ -59,3 +62,28 @@ def sample_frame_with_preference(scene, opt, dataset, viewpoint_stack):
         sampled_frame_no = np.random.choice(range(total_num_frames), size=opt.batch_size)
     viewpoint_cams = [viewpoint_stack[c * scene.maxtime + f] for c, f in zip(sampled_cam_no, sampled_frame_no)]
     return sampled_frame_no, viewpoint_cams
+
+def compute_closest_distances_2_gaussians(gaussian_positions, point_cloud_path):
+    pcd = o3d.io.read_point_cloud(point_cloud_path)
+    pcd_vertices = np.asarray(pcd.points).astype("f")
+    
+    sampled_indices = np.random.choice(len(pcd_vertices), 4000, replace=False)
+
+    tree = KDTree(gaussian_positions) # points to search within
+    dist, _ = tree.query(pcd_vertices[sampled_indices], k=1) # Find closest point in gaussian_points for each point in the point cloud
+
+    return dist
+
+def compute_closest_distances_2_gaussians_tensor(gaussian_positions_tensor, point_cloud_path):
+    pcd = o3d.io.read_point_cloud(point_cloud_path)
+    pcd_vertices_tensor = torch.tensor(np.asarray(pcd.points).astype("f"))
+
+    pcd_indices = torch.randperm(len(pcd_vertices_tensor))[:4000]
+
+    pcd_vertices_tensor_exp = pcd_vertices_tensor[pcd_indices].unsqueeze(1).cuda()
+    gaussian_positions_tensor_exp = gaussian_positions_tensor.unsqueeze(0)
+
+    distances = torch.sum((pcd_vertices_tensor_exp - gaussian_positions_tensor_exp) ** 2, dim=2)
+    closest_distances = torch.sqrt(torch.min(distances, dim=1).values)
+
+    return closest_distances
