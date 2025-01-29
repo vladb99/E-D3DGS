@@ -16,7 +16,7 @@ import os
 import cv2
 from tqdm import tqdm
 from os import makedirs
-from gaussian_renderer import render
+from gaussian_renderer import render, render_tongue, render_without_tongue
 import torchvision
 from plyfile import PlyData, PlyElement
 from utils.general_utils import safe_state
@@ -31,12 +31,21 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     shading_path = os.path.join(model_path, name, "ours_{}".format(iteration), "shading")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    tongue_mask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "tongueMask")
+    tongue_render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "tongueRender")
+    render_wo_tongue_path = os.path.join(model_path, name, "ours_{}".format(iteration), "woTongueRender")
 
     makedirs(render_path, exist_ok=True)
     makedirs(shading_path, exist_ok=True)
+    makedirs(tongue_mask_path, exist_ok=True)
+    makedirs(tongue_render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
+    makedirs(render_wo_tongue_path, exist_ok=True)
     render_images = []
     shading_images = []
+    tongue_mask_images = []
+    tongue_images = []
+    render_wo_tongue_images = []
     gt_list = []
     render_list = []
     deform_vertices = []
@@ -57,6 +66,17 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         render_pkg = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
         rendering = render_pkg["render"]
         normal_map = render_pkg["normal"]
+        tongue_mask = render_pkg["tongue_mask"]
+
+        render_tongue_pkg = render_tongue(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+        tongue_rendering = render_tongue_pkg["render"]
+
+        render_wo_tongue_pkg = render_without_tongue(view, gaussians, pipeline, background, kernel_size=kernel_size,
+                                          iter=iteration, require_depth=True, require_coord=True,
+                                          num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f,
+                                          disable_filter3D=disable_filter3D)
+        wo_tongue_rendering = render_wo_tongue_pkg["render"]
+
         time2 = time()
         total_time += (time2 - time1)
         render_images.append(to8b(rendering).transpose(1,2,0))
@@ -65,7 +85,12 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         shading_image = phong_reflection(normal_map, cam2world = view.world_view_transform.T.inverse())
         shading_images.append(to8b(shading_image).transpose(1,2,0))
         torchvision.utils.save_image(shading_image, os.path.join(shading_path, '{0:05d}'.format(count) + ".png"))
-
+        tongue_mask_images.append(to8b(tongue_mask).transpose(1,2,0))
+        torchvision.utils.save_image(tongue_mask, os.path.join(tongue_mask_path, '{0:05d}'.format(count) + ".png"))
+        tongue_images.append(to8b(tongue_rendering).transpose(1, 2, 0))
+        torchvision.utils.save_image(tongue_rendering, os.path.join(tongue_render_path, '{0:05d}'.format(count) + ".png"))
+        render_wo_tongue_images.append(to8b(wo_tongue_rendering).transpose(1, 2, 0))
+        torchvision.utils.save_image(wo_tongue_rendering, os.path.join(render_wo_tongue_path, '{0:05d}'.format(count) + ".png"))
         # render_list.append(rendering)
 
         if name in ["train", "test"]:
@@ -91,6 +116,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=30, quality=8)
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'shading.mp4'), shading_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'tongue_masks.mp4'), tongue_mask_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'tongue_render.mp4'), tongue_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'wo_tongue_render.mp4'), render_wo_tongue_images, fps=30, quality=8)
 
 
 def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, skip_video: bool):

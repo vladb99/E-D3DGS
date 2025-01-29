@@ -63,6 +63,8 @@ class ModelParams(ParamGroup):
         self.is_sample_from_past = False
         self.frame_indices_higher_preference = []
         self.frame_preference_probability = 0.5
+        self.tongue_mask_loss_enabled = False
+        self.colmap_supervision_enabled = False
         # From RaDe-GS
         self.use_coord_map = False
         self.kernel_size = 0.0  # Size of 2D filter in mip-splatting

@@ -60,6 +60,7 @@ class GaussianModel:
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
         self._embedding = torch.empty(0)
+        self.tongue_class = torch.empty(0)
 
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
@@ -146,7 +147,7 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
-    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, time_line: int):
+    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, time_line: int, tongue_mask_loss_enabled: bool):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
 
@@ -175,6 +176,20 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self._embedding = nn.Parameter(embedding.requires_grad_(True))  # [jm]
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+        # Assigning tongue gaussians based on point cloud
+        match = (np.asarray(pcd.colors) == np.array([1, 0, 0])).all(axis=1)
+        print("Tongue matches found: {}".format(match.sum()))
+        indices = np.where(match)[0]
+        is_tongue = torch.zeros_like(self._opacity, device="cuda")
+        if tongue_mask_loss_enabled:
+            is_tongue[indices] = 1
+        self.tongue_class = is_tongue
+
+        # Assigning tongue gaussians randomly
+        # is_tongue = torch.zeros_like(self._opacity, device="cuda")
+        # is_tongue[torch.randperm(len(is_tongue))[:1000]] = 1
+        # self.tongue_class = is_tongue
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -227,6 +242,7 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         for i in range(self._embedding.shape[1]):
             l.append('embedding_{}'.format(i))
+        l.append('tongue_class')
         if not exclude_filter:
             l.append('filter_3D')
         return l
@@ -253,11 +269,12 @@ class GaussianModel:
         rotation = self._rotation.detach().cpu().numpy()
         embedding = self._embedding.detach().cpu().numpy()
         filter_3D = self.filter_3D.detach().cpu().numpy()
+        tongue_class = self.tongue_class.detach().cpu().numpy()
         
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, embedding, filter_3D), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, embedding, tongue_class, filter_3D), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -279,6 +296,10 @@ class GaussianModel:
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+        if "tongue_class" in plydata.elements[0]:
+            tongue_class = np.asarray(plydata.elements[0]["tongue_class"])[..., np.newaxis]
+        else:
+            tongue_class = np.zeros_like(opacities)
 
         filter_3D = np.asarray(plydata.elements[0]["filter_3D"])[..., np.newaxis]
 
@@ -323,6 +344,7 @@ class GaussianModel:
         self._embedding = nn.Parameter(torch.tensor(embeddings, dtype=torch.float, device="cuda").requires_grad_(True))
         self.filter_3D = torch.tensor(filter_3D, dtype=torch.float, device="cuda")
         self.active_sh_degree = self.max_sh_degree
+        self.tongue_class = nn.Parameter(torch.tensor(tongue_class, dtype=torch.float, device="cuda").requires_grad_(True))
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -361,6 +383,8 @@ class GaussianModel:
 
     def prune_points(self, mask):
         valid_points_mask = ~mask
+        #filter_mask = torch.round(self.tongue_class).bool().squeeze()
+        #valid_points_mask = torch.logical_or(valid_points_mask, filter_mask)
         optimizable_tensors = self._prune_optimizer(valid_points_mask)
 
         self._xyz = optimizable_tensors["xyz"]
@@ -373,6 +397,7 @@ class GaussianModel:
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
+        self.tongue_class = self.tongue_class[valid_points_mask]
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -397,7 +422,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding, new_tongue_class):
         d = {"xyz": new_xyz, 
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -415,7 +440,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._embedding = optimizable_tensors["embedding"]
-        
+        # is_tongue = torch.zeros_like(self._opacity, device="cuda")
+        # is_tongue[:len(self.tongue_class)] = self.tongue_class
+        # self.tongue_class = is_tongue
+        self.tongue_class = torch.cat((self.tongue_class, new_tongue_class), dim=0)
+
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
@@ -441,7 +470,8 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_embedding = self._embedding[selected_pts_mask].repeat(N,1)
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_embedding)
+        new_tongue_class = self.tongue_class[selected_pts_mask].repeat(N,1)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_embedding, new_tongue_class)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -459,7 +489,8 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_embedding = self._embedding[selected_pts_mask]
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding)
+        new_tongue_class = self.tongue_class[selected_pts_mask]
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding, new_tongue_class)
 
     def prune(self, max_grad, min_opacity, extent, max_screen_size, use_mean=False):
         if use_mean:

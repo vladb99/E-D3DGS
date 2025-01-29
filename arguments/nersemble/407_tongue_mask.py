@@ -16,9 +16,4 @@ OptimizationParams = dict(
     deformation_lr_max_steps = 80_000,
 
     radegs_regularization_from_iter = 15_000,
-
-    max_number_gaussians = 40_000,
-
-    tongue_mask_loss_enabled = False,
-    colmap_supervision_enabled = True,
 )

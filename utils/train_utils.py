@@ -80,10 +80,11 @@ def compute_closest_distances_2_gaussians_tensor(gaussian_positions_tensor, poin
 
     pcd_indices = torch.randperm(len(pcd_vertices_tensor))[:4000]
 
-    pcd_vertices_tensor_exp = pcd_vertices_tensor[pcd_indices].unsqueeze(1).cuda()
-    gaussian_positions_tensor_exp = gaussian_positions_tensor.unsqueeze(0)
+    # Multiplying with 1000 to have millimeters
+    pcd_vertices_tensor_exp = pcd_vertices_tensor[pcd_indices].unsqueeze(1).cuda() * 1000
+    gaussian_positions_tensor_exp = gaussian_positions_tensor.unsqueeze(0) * 1000
 
-    distances = torch.sum((pcd_vertices_tensor_exp - gaussian_positions_tensor_exp) ** 2, dim=2)
-    closest_distances = torch.sqrt(torch.min(distances, dim=1).values)
+    squared_distances = torch.sum((pcd_vertices_tensor_exp - gaussian_positions_tensor_exp) ** 2, dim=2)
+    closest_distances = torch.min(squared_distances, dim=1).values
 
     return closest_distances

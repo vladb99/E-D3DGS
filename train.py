@@ -17,7 +17,7 @@ import os
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim, l2_loss, lpips_loss
-from gaussian_renderer import render, network_gui
+from gaussian_renderer import render, network_gui, render_tongue, render_without_tongue
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
@@ -169,7 +169,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         cam_no_list, frame_no_list = [], []
         reg_kick_on = iteration >= opt.radegs_regularization_from_iter
         for viewpoint_cam in viewpoint_cams:
-            if type(viewpoint_cam.original_image) == type(None):
+            if type(viewpoint_cam.original_image) == type(None) or type(viewpoint_cam.tongue_mask) == type(None):
                 viewpoint_cam.load_image()  # for lazy loading (to avoid OOM issue)
             cam_no = viewpoint_cam.cam_no
             frame_no = viewpoint_cam.frame_no
@@ -208,20 +208,29 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             loss_list[cam_no_list[i], frame_no_list[i]] = Ll1_items[i].item()
 
         # use l1 instead of opacity reset
+        filter_mask = torch.round(gaussians.tongue_class).bool().squeeze()
+        total_tongue_gaussians = filter_mask.sum()
         if opt.opacity_l1_coef_fine > 0.:
             opacity_mean_loss = torch.sigmoid(gaussians._opacity.mean())
             loss += opt.opacity_l1_coef_fine * opacity_mean_loss
 
         # embedding reg using knn (https://github.com/JonathonLuiten/Dynamic3DGaussians)
         if prev_num_pts != gaussians._xyz.shape[0]:
-            neighbor_sq_dist, neighbor_indices = o3d_knn(gaussians._xyz.detach().cpu().numpy(), 20)
+            neighbor_sq_dist, neighbor_indices = o3d_knn(gaussians._xyz[~filter_mask, :].detach().cpu().numpy(), 20)
             neighbor_weight = np.exp(-2000 * neighbor_sq_dist)
             neighbor_indices = torch.tensor(neighbor_indices).cuda().long().contiguous()
             neighbor_weight = torch.tensor(neighbor_weight).cuda().float().contiguous()
             prev_num_pts = gaussians._xyz.shape[0]
 
-        emb = gaussians._embedding[:,None,:].repeat(1,20,1)
-        emb_knn = gaussians._embedding[neighbor_indices]
+            if dataset.tongue_mask_loss_enabled:
+                tongue_neighbor_sq_dist, tongue_neighbor_indices = o3d_knn(gaussians._xyz[filter_mask, :].detach().cpu().numpy(), 20)
+                tongue_neighbor_weight = np.exp(-2000 * tongue_neighbor_sq_dist)
+                tongue_neighbor_indices = torch.tensor(tongue_neighbor_indices).cuda().long().contiguous()
+                tongue_neighbor_weight = torch.tensor(tongue_neighbor_weight).cuda().float().contiguous()
+
+        # Normal gaussians
+        emb = gaussians._embedding[~filter_mask,None,:].repeat(1,20,1)
+        emb_knn = gaussians._embedding[~filter_mask, :][neighbor_indices]
         embedding_loss = weighted_l2_loss_v2(emb, emb_knn, neighbor_weight)
         loss += opt.reg_coef * embedding_loss
 
@@ -263,25 +272,75 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
         ###
 
         colmap_pcd_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
-        # if iteration > hyper.deform_from_iter: #and (iteration % 100 == 0):
-        #     # Colmap point cloud supervision
-        #     frame_number = int(viewpoint_cam.image_path.split("/")[-1].split(".")[0])
-        #     frame_name = "{:05}".format(frame_number * 3)
-        #     pcd_path = os.path.join("/home/vbratulescu/Downloads/407-tongue-annotations/407/sequences/EXP-6-tongue-1/timesteps/frame_" + frame_name, "colmap", "pointclouds", "pointcloud_16.pcd")
-        #
-        #     # Debug
-        #     # /home/vbratulescu/git/data/Nersemble_processed/407/EXP-6-tongue-1/images/cam09/0064.png
-        #     # /home/vbratulescu/Downloads/407-tongue-annotations/407/sequences/EXP-6-tongue-1/timesteps/frame_00000/colmap/pointclouds/pointcloud_16.pcd
-        #     # print(viewpoint_cam.image_path)
-        #     # print(pcd_path)
-        #
-        #     gaussian_positions = render_pkg["deformed_gaussian_positions"]
-        #     closest_distances = compute_closest_distances_2_gaussians_tensor(gaussian_positions, pcd_path)
-        #
-        #     if True:
-        #         colmap_pcd_loss = closest_distances.mean()
-        #         closest_distance_coef = 100
-        #         loss += closest_distance_coef * colmap_pcd_loss
+        if dataset.colmap_supervision_enabled:
+            if iteration > hyper.deform_from_iter: #and (iteration % 100 == 0):
+                # Colmap point cloud supervision
+                frame_number = int(viewpoint_cam.image_path.split("/")[-1].split(".")[0])
+                frame_name = "{:05}".format(frame_number * 3)
+                # Check that the pcd ground truth is for the correct person and scene
+                assert("/home/vbratulescu/Downloads/407-tongue-annotations/407".split("/")[-1] == dataset.source_path.split("/")[6])
+                assert("/home/vbratulescu/Downloads/407-tongue-annotations/407/sequences/EXP-6-tongue-1-color-corrected".split("/")[-1] == dataset.source_path.split("/")[7])
+                pcd_path = os.path.join("/home/vbratulescu/Downloads/407-tongue-annotations/407/sequences/EXP-6-tongue-1/timesteps/frame_" + frame_name, "colmap", "pointclouds", "pointcloud_16.pcd")
+
+                # Debug
+                # /home/vbratulescu/git/data/Nersemble_processed/407/EXP-6-tongue-1/images/cam09/0064.png
+                # /home/vbratulescu/Downloads/407-tongue-annotations/407/sequences/EXP-6-tongue-1/timesteps/frame_00000/colmap/pointclouds/pointcloud_16.pcd
+                # print(viewpoint_cam.image_path)
+                # print(pcd_path)
+
+                gaussian_positions = render_pkg["deformed_gaussian_positions"]
+                closest_distances = compute_closest_distances_2_gaussians_tensor(gaussian_positions, pcd_path)
+
+                colmap_pcd_loss = closest_distances.mean()
+                closest_distance_coef = 0.01
+                loss += closest_distance_coef * colmap_pcd_loss
+
+        # Tongue loss
+        tongue_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
+        tongue_embedding_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
+        tongue_rgb_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
+        wo_tongue_rgb_loss = torch.tensor(0, dtype=torch.float32, device="cuda")
+        tongue_opacity_mean = torch.tensor(0, dtype=torch.float32, device="cuda")
+        if dataset.tongue_mask_loss_enabled:
+            # Tongue mask loss
+            tongue_l1_loss = l1_loss(viewpoint_cam.tongue_mask.cuda(), render_pkg["tongue_mask"], keepdim=True)
+            tongue_opacity_mean = torch.sigmoid(gaussians._opacity[filter_mask].mean())
+            tongue_loss = tongue_l1_loss.mean()
+            loss += tongue_loss * 5 # foctor 5 added 26-01-2025 11:00
+
+            # Tongue gaussians embedding
+            tongue_emb = gaussians._embedding[filter_mask, None, :].repeat(1, 20, 1)
+            tongue_emb_knn = gaussians._embedding[filter_mask, :][tongue_neighbor_indices]
+            tongue_embedding_loss = weighted_l2_loss_v2(tongue_emb, tongue_emb_knn, tongue_neighbor_weight)
+            loss += opt.reg_coef * tongue_embedding_loss
+
+            # Tongue RGB loss, we mask both the ground truth and the rendering by tongue segmentaiton
+            gt_mask = viewpoint_cam.tongue_mask.cuda()
+            if gt_mask.mean() > 0.005: # Only apply when tongue is visible
+                render_tongue_pkg = render_tongue(viewpoint_cam, gaussians, pipe, background, kernel_size,
+                                                  require_coord=require_coord and reg_kick_on,
+                                                  require_depth=require_depth and reg_kick_on, cam_no=cam_no, iter=iteration,
+                                                  num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings,
+                                                  disable_filter3D=dataset.disable_filter3D)
+                gt_image_tongue = gt_image_tensor.squeeze(0) * gt_mask
+                render_image_tongue = render_tongue_pkg["render"]* gt_mask
+                tongue_rgb_l1_loss = l1_loss(gt_image_tongue, render_image_tongue , keepdim=True)
+                tongue_rgb_loss = tongue_rgb_l1_loss.mean() * 1/gt_mask.mean()
+                loss += tongue_rgb_loss
+
+            # RGB Loss without tongue
+            gt_mask = 1 - viewpoint_cam.tongue_mask.cuda()
+            render_wo_tongue_pkg = render_without_tongue(viewpoint_cam, gaussians, pipe, background, kernel_size,
+                                              require_coord=require_coord and reg_kick_on,
+                                              require_depth=require_depth and reg_kick_on, cam_no=cam_no,
+                                              iter=iteration,
+                                              num_down_emb_c=hyper.min_embeddings, num_down_emb_f=hyper.min_embeddings,
+                                              disable_filter3D=dataset.disable_filter3D)
+            gt_image_wo_tongue = gt_image_tensor.squeeze(0) * gt_mask
+            render_image_wo_tongue = render_wo_tongue_pkg["render"] * gt_mask
+            wo_tongue_rgb_l1_loss = l1_loss(gt_image_wo_tongue, render_image_wo_tongue, keepdim=True)
+            wo_tongue_rgb_loss = wo_tongue_rgb_l1_loss.mean() * 1 / gt_mask.mean()
+            loss += wo_tongue_rgb_loss * 0.5
 
         loss.backward()
         viewspace_point_tensor_grad = torch.zeros_like(viewspace_point_tensor)
@@ -314,7 +373,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
             # Log and save
             timer.pause()
 
-            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss, total_point, Lssim, temporal_loss, embedding_loss, opacity_mean_loss, colmap_pcd_loss)
+            training_report(tb_writer, iteration, Ll1, loss, psnr_, iter_start.elapsed_time(iter_end), depth_normal_loss, total_point, Lssim, temporal_loss, embedding_loss, opacity_mean_loss, colmap_pcd_loss, tongue_loss, tongue_opacity_mean, total_tongue_gaussians, tongue_embedding_loss, tongue_rgb_loss, wo_tongue_rgb_loss)
 
             if (tb_writer and (iteration % 100 == 0)):
                 test_cam = np.random.choice(test_cams)
@@ -355,26 +414,26 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
                     gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
 
-                    # # From RaDe-GS
-                    # if dataset.disable_filter3D:
-                    #     gaussians.reset_3D_filter()
-                    # else:
-                    #     gaussians.compute_3D_filter(cameras=train_cams)
-                    # ###
-                if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                
-                    gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
-                
-                    # # From RaDe-GS
+                    # From RaDe-GS
                     if dataset.disable_filter3D:
                         gaussians.reset_3D_filter()
                     else:
                         gaussians.compute_3D_filter(cameras=train_cams)
-                    # ###
-                
-                    if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
-                        gaussians.reset_opacity(opt.reset_opacity_ratio)
+                    ###
+                # if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
+                #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                #
+                #     gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
+                #
+                #     # # From RaDe-GS
+                #     if dataset.disable_filter3D:
+                #         gaussians.reset_3D_filter()
+                #     else:
+                #         gaussians.compute_3D_filter(cameras=train_cams)
+                #     # ###
+                #
+                #     if opt.reset_opacity_ratio > 0 and iteration % opt.pruning_interval == 0:
+                #         gaussians.reset_opacity(opt.reset_opacity_ratio)
 
             # ### From RaDe-GS
             if iteration % 100 == 0 and iteration > opt.densify_until_iter and not dataset.disable_filter3D:
@@ -444,7 +503,7 @@ def setup_seed(seed):
      torch.backends.cudnn.deterministic = True
 
 
-def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss, total_points, dssim_loss, temporal_loss, embedding_loss, opacity_mean_loss, colmap_pcd_loss):
+def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss, total_points, dssim_loss, temporal_loss, embedding_loss, opacity_mean_loss, colmap_pcd_loss, tongue_loss, tongue_opacity_mean, total_tongue_gaussians, tongue_embedding_loss, tongue_rgb_loss, wo_tongue_rgb_loss):
     if tb_writer:
         tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/normal_loss', normal_loss.item(), iteration)
@@ -452,11 +511,17 @@ def training_report(tb_writer, iteration, Ll1, loss, psnr, elapsed, normal_loss,
         tb_writer.add_scalar('train_loss_patches/dssim_loss', dssim_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/temporal_loss', temporal_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/embedding_loss', embedding_loss.item(), iteration)
+        tb_writer.add_scalar('train_loss_patches/tongue_embedding_loss', tongue_embedding_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/opacity_mean_loss', opacity_mean_loss.item(), iteration)
         tb_writer.add_scalar('train_loss_patches/psnr', psnr, iteration)
         tb_writer.add_scalar('train_loss_patches/colmap_pcd_loss', colmap_pcd_loss, iteration)
+        tb_writer.add_scalar('train_loss_patches/tongue_loss', tongue_loss, iteration)
+        tb_writer.add_scalar('train_loss_patches/wo_tongue_rgb_loss', wo_tongue_rgb_loss, iteration)
+        tb_writer.add_scalar('train_loss_patches/tongue_rgb_loss', tongue_rgb_loss, iteration)
+        tb_writer.add_scalar('train_loss_patches/tongue_opacity_mean', tongue_opacity_mean, iteration)
         tb_writer.add_scalar('iter_time', elapsed, iteration)
         tb_writer.add_scalar('total_points', total_points, iteration)
+        tb_writer.add_scalar('total_tongue_gaussians', total_tongue_gaussians, iteration)
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -473,7 +538,7 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[i*500 for i in range(0,120)])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 55000, 60000, 80000, 100000, 120000, 160000, 500000, 1100000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[3000, 5000, 7000, 14000, 20000, 30000, 45000, 55000, 60000, 70000, 75000, 80000, 100000, 120000, 160000, 500000, 1100000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[5_000, 80_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
