@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -16,7 +16,7 @@ import os
 import cv2
 from tqdm import tqdm
 from os import makedirs
-from gaussian_renderer import render
+from gaussian_renderer import render, render_tongue, render_without_tongue
 import torchvision
 from plyfile import PlyData, PlyElement
 from utils.general_utils import safe_state
@@ -27,23 +27,35 @@ from time import time
 to8b = lambda x : (255*np.clip(x.cpu().numpy(),0,1)).astype(np.uint8)
 
 
-def render_set(model_path, name, iteration, views, gaussians, pipeline, background, hyperparam=None):
+def render_set(model_path, name, iteration, views, gaussians, pipeline, background, kernel_size, hyperparam=None, disable_filter3D=True):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    shading_path = os.path.join(model_path, name, "ours_{}".format(iteration), "shading")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    tongue_mask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "tongueMask")
+    tongue_render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "tongueRender")
+    render_wo_tongue_path = os.path.join(model_path, name, "ours_{}".format(iteration), "woTongueRender")
 
     makedirs(render_path, exist_ok=True)
+    makedirs(shading_path, exist_ok=True)
+    makedirs(tongue_mask_path, exist_ok=True)
+    makedirs(tongue_render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
+    makedirs(render_wo_tongue_path, exist_ok=True)
     render_images = []
+    shading_images = []
+    tongue_mask_images = []
+    tongue_images = []
+    render_wo_tongue_images = []
     gt_list = []
     render_list = []
     deform_vertices = []
 
     num_down_emb_c = hyperparam.min_embeddings
-    num_down_emb_f = hyperparam.min_embeddings    
-    
+    num_down_emb_f = hyperparam.min_embeddings
+
     count = 0
     total_time = 0
-    
+
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         if type(view.original_image) == type(None):
             if name == 'video':
@@ -51,21 +63,44 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
             else:
                 view.load_image()
         time1 = time()
-        rendering = render(view, gaussians, pipeline, background, iter=iteration, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f)["render"]
+        render_pkg = render(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+        rendering = render_pkg["render"]
+        normal_map = render_pkg["normal"]
+        tongue_mask = render_pkg["tongue_mask"]
+
+        render_tongue_pkg = render_tongue(view, gaussians, pipeline, background, kernel_size=kernel_size, iter=iteration, require_depth=True, require_coord=True, num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f, disable_filter3D=disable_filter3D)
+        tongue_rendering = render_tongue_pkg["render"]
+
+        render_wo_tongue_pkg = render_without_tongue(view, gaussians, pipeline, background, kernel_size=kernel_size,
+                                          iter=iteration, require_depth=True, require_coord=True,
+                                          num_down_emb_c=num_down_emb_c, num_down_emb_f=num_down_emb_f,
+                                          disable_filter3D=disable_filter3D)
+        wo_tongue_rendering = render_wo_tongue_pkg["render"]
+
         time2 = time()
         total_time += (time2 - time1)
         render_images.append(to8b(rendering).transpose(1,2,0))
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(count) + ".png"))
+
+        shading_image = phong_reflection(normal_map, cam2world = view.world_view_transform.T.inverse())
+        shading_images.append(to8b(shading_image).transpose(1,2,0))
+        torchvision.utils.save_image(shading_image, os.path.join(shading_path, '{0:05d}'.format(count) + ".png"))
+        tongue_mask_images.append(to8b(tongue_mask).transpose(1,2,0))
+        torchvision.utils.save_image(tongue_mask, os.path.join(tongue_mask_path, '{0:05d}'.format(count) + ".png"))
+        tongue_images.append(to8b(tongue_rendering).transpose(1, 2, 0))
+        torchvision.utils.save_image(tongue_rendering, os.path.join(tongue_render_path, '{0:05d}'.format(count) + ".png"))
+        render_wo_tongue_images.append(to8b(wo_tongue_rendering).transpose(1, 2, 0))
+        torchvision.utils.save_image(wo_tongue_rendering, os.path.join(render_wo_tongue_path, '{0:05d}'.format(count) + ".png"))
         # render_list.append(rendering)
-    
+
         if name in ["train", "test"]:
             gt = view.original_image[0:3, :, :]
             torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(count) + ".png"))
             # gt_list.append(gt)
         count +=1
-        
+
     print("FPS:",(len(views)-1)/total_time)
-    
+
     # count = 0
     # print("writing training images.")
     # if len(gt_list) != 0:
@@ -78,8 +113,12 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     #     for image in tqdm(render_list):
     #         torchvision.utils.save_image(image, os.path.join(render_path, '{0:05d}'.format(count) + ".png"))
     #         count +=1
-    
+
     imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'video_rgb.mp4'), render_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'shading.mp4'), shading_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'tongue_masks.mp4'), tongue_mask_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'tongue_render.mp4'), tongue_images, fps=30, quality=8)
+    imageio.mimwrite(os.path.join(model_path, name, "ours_{}".format(iteration), 'wo_tongue_render.mp4'), render_wo_tongue_images, fps=30, quality=8)
 
 
 def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, skip_video: bool):
@@ -91,12 +130,53 @@ def render_sets(dataset : ModelParams, hyperparam, opt, iteration : int, pipelin
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, hyperparam=hyperparam)
+            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D, kernel_size=dataset.kernel_size)
         if not skip_test:
-            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, hyperparam=hyperparam)
+            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D, kernel_size=dataset.kernel_size)
         if not skip_video:
-            render_set(dataset.model_path, "video", scene.loaded_iter, scene.getVideoCameras(), gaussians, pipeline, background, hyperparam=hyperparam)
+            render_set(dataset.model_path, "video", scene.loaded_iter, scene.getVideoCameras(), gaussians, pipeline, background, hyperparam=hyperparam, disable_filter3D=dataset.disable_filter3D, kernel_size=dataset.kernel_size)
 
+
+def phong_reflection(normal_map_cam, cam2world, k_a = 0.1, k_d = 0.7, k_s = 1.0, shininess = 16):
+    """
+    Computes the per pixel light intensity using the Phong reflection model based on the provided normal map
+    and camera-to-world transformation matrix.
+
+    Parameters:
+        normal_map_cam (torch.tensor [3, H, W]): The normal map of the surface as a 3D array.
+        cam2world (torch.tensor [4,4]): Camera-to-world transformation matrix.
+        k_a (float, optional): Ambient reflection coefficient, defaults to 0.1.
+        k_d (float, optional): Diffuse reflection coefficient, defaults to 0.7.
+        k_s (float, optional): Specular reflection coefficient, defaults to 0.5.
+        shininess (int, optional): Shininess factor that affects specular highlight size, defaults to 16.
+
+    Returns:
+         torch.tensor [3, H, W]: An array representing the reflected light intensities per pixel.
+
+    For more details, see the Phong reflection model:
+    https://en.wikipedia.org/wiki/Phong_reflection_model
+    """
+    with torch.no_grad():
+        ambient_intensity = torch.tensor([1.0, 1.0, 1.0]).cuda().view(3, 1, 1)
+        diffuse_intensity = torch.tensor([1.0, 1.0, 1.0]).cuda().view(3, 1, 1)
+        light_intensity = torch.tensor([0.5, 0.5, 0.5]).cuda().view(3, 1, 1)
+
+        light_direction_world = torch.tensor([1.0, -1.0, 0]).cuda()
+        light_direction_world = light_direction_world / torch.norm(light_direction_world)
+
+        viewer_direction_world = cam2world[:3,:3] @ torch.tensor([0, 0, 1.0]).cuda()
+
+        # Transforming normal form cam to world by left multiplying rotation matrix for every pixel
+        normal_map_world = torch.einsum('ij,jkl->ikl', cam2world[:3, :3], normal_map_cam)
+
+        reflect_direction = 2.0 * torch.tensordot(light_direction_world, normal_map_world, dims=([0], [0])) * normal_map_world - light_direction_world.view(3, 1, 1)
+
+        # Total intensity
+        phong_intensity = k_a * ambient_intensity\
+                        + k_d * torch.tensordot(light_direction_world, normal_map_world, dims=([0], [0])) * diffuse_intensity\
+                        + k_s * torch.pow(torch.tensordot(viewer_direction_world, reflect_direction, dims=([0], [0])), shininess) * light_intensity
+
+        return phong_intensity
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -111,7 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--skip_video", action="store_true")
     parser.add_argument("--configs", type=str)
-    
+
     # import sys
     # args = parser.parse_args(sys.argv[1:])
     args = get_combined_args(parser)

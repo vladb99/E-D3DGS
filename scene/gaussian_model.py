@@ -22,6 +22,7 @@ from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from scene.deformation import deform_network
+import math
 
 
 class GaussianModel:
@@ -59,6 +60,7 @@ class GaussianModel:
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
         self._embedding = torch.empty(0)
+        self.tongue_class = torch.empty(0)
 
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
@@ -89,7 +91,7 @@ class GaussianModel:
     def restore(self, model_args, training_args):
         (self.active_sh_degree, 
         self._xyz, 
-        self._deformation,
+        deformation_dict,
         self._features_dc, 
         self._features_rest,
         self._embedding,
@@ -104,6 +106,7 @@ class GaussianModel:
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
+        # self._deformation.load_state_dict(deformation_dict)
         self.optimizer.load_state_dict(opt_dict)
 
     @property
@@ -144,7 +147,7 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
-    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, time_line: int):
+    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float, time_line: int, tongue_mask_loss_enabled: bool):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
 
@@ -173,6 +176,20 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self._embedding = nn.Parameter(embedding.requires_grad_(True))  # [jm]
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+        # Assigning tongue gaussians based on point cloud
+        match = (np.asarray(pcd.colors) == np.array([1, 0, 0])).all(axis=1)
+        print("Tongue matches found: {}".format(match.sum()))
+        indices = np.where(match)[0]
+        is_tongue = torch.zeros_like(self._opacity, device="cuda")
+        if tongue_mask_loss_enabled:
+            is_tongue[indices] = 1
+        self.tongue_class = is_tongue
+
+        # Assigning tongue gaussians randomly
+        # is_tongue = torch.zeros_like(self._opacity, device="cuda")
+        # is_tongue[torch.randperm(len(is_tongue))[:1000]] = 1
+        # self.tongue_class = is_tongue
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -211,7 +228,7 @@ class GaussianModel:
                 lr = self.deformation_scheduler_args(iteration)
                 param_group['lr'] = lr
 
-    def construct_list_of_attributes(self):
+    def construct_list_of_attributes(self, exclude_filter=False):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
         # All channels except the 3 DC
         for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
@@ -225,6 +242,9 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         for i in range(self._embedding.shape[1]):
             l.append('embedding_{}'.format(i))
+        l.append('tongue_class')
+        if not exclude_filter:
+            l.append('filter_3D')
         return l
 
     def load_model(self, path):
@@ -248,15 +268,18 @@ class GaussianModel:
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
         embedding = self._embedding.detach().cpu().numpy()
+        filter_3D = self.filter_3D.detach().cpu().numpy()
+        tongue_class = self.tongue_class.detach().cpu().numpy()
         
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, embedding), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, embedding, tongue_class, filter_3D), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
-        
+
+    # reset_opacity also uses self.filter3D, however E-D3DGS doesn't do any reset_opacity, but minimizes the mean opacity
     def reset_opacity(self, ratio=0):
         opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
         if ratio is not None:
@@ -273,6 +296,12 @@ class GaussianModel:
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+        if "tongue_class" in plydata.elements[0]:
+            tongue_class = np.asarray(plydata.elements[0]["tongue_class"])[..., np.newaxis]
+        else:
+            tongue_class = np.zeros_like(opacities)
+
+        filter_3D = np.asarray(plydata.elements[0]["filter_3D"])[..., np.newaxis]
 
         features_dc = np.zeros((xyz.shape[0], 3, 1))
         features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
@@ -313,7 +342,9 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self._embedding = nn.Parameter(torch.tensor(embeddings, dtype=torch.float, device="cuda").requires_grad_(True))
+        self.filter_3D = torch.tensor(filter_3D, dtype=torch.float, device="cuda")
         self.active_sh_degree = self.max_sh_degree
+        self.tongue_class = nn.Parameter(torch.tensor(tongue_class, dtype=torch.float, device="cuda").requires_grad_(True))
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -352,6 +383,8 @@ class GaussianModel:
 
     def prune_points(self, mask):
         valid_points_mask = ~mask
+        #filter_mask = torch.round(self.tongue_class).bool().squeeze()
+        #valid_points_mask = torch.logical_or(valid_points_mask, filter_mask)
         optimizable_tensors = self._prune_optimizer(valid_points_mask)
 
         self._xyz = optimizable_tensors["xyz"]
@@ -364,6 +397,7 @@ class GaussianModel:
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
+        self.tongue_class = self.tongue_class[valid_points_mask]
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -388,7 +422,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding, new_tongue_class):
         d = {"xyz": new_xyz, 
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -406,7 +440,11 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._embedding = optimizable_tensors["embedding"]
-        
+        # is_tongue = torch.zeros_like(self._opacity, device="cuda")
+        # is_tongue[:len(self.tongue_class)] = self.tongue_class
+        # self.tongue_class = is_tongue
+        self.tongue_class = torch.cat((self.tongue_class, new_tongue_class), dim=0)
+
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
@@ -432,7 +470,8 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_embedding = self._embedding[selected_pts_mask].repeat(N,1)
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_embedding)
+        new_tongue_class = self.tongue_class[selected_pts_mask].repeat(N,1)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_embedding, new_tongue_class)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -450,7 +489,8 @@ class GaussianModel:
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_embedding = self._embedding[selected_pts_mask]
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding)
+        new_tongue_class = self.tongue_class[selected_pts_mask]
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_embedding, new_tongue_class)
 
     def prune(self, max_grad, min_opacity, extent, max_screen_size, use_mean=False):
         if use_mean:
@@ -488,3 +528,77 @@ class GaussianModel:
                     if weight.grad.mean() != 0:
                         print(name," :",weight.grad.mean(), weight.grad.min(), weight.grad.max())
         print("-"*50)
+
+    ### RaDe-GS
+    @torch.no_grad()
+    def reset_3D_filter(self):
+        xyz = self.get_xyz
+        self.filter_3D = torch.zeros([xyz.shape[0], 1], device=xyz.device)
+
+    @torch.no_grad()
+    def compute_3D_filter(self, cameras):
+        # print("Computing 3D filter")
+        # TODO consider focal length and image width
+        xyz = self.get_xyz
+        distance = torch.ones((xyz.shape[0]), device=xyz.device) * 100000.0
+        valid_points = torch.zeros((xyz.shape[0]), device=xyz.device, dtype=torch.bool)
+
+        # we should use the focal length of the highest resolution camera
+        focal_length = 0.
+        for camera in cameras:
+            # focal_x = float(camera.intrinsic[0,0])
+            # focal_y = float(camera.intrinsic[1,1])
+            if type(camera.original_image) == type(None):
+                camera.load_image() # lazy loading
+            W, H = camera.image_width, camera.image_height
+            focal_x = W / (2 * math.tan(camera.FoVx / 2.))
+            focal_y = H / (2 * math.tan(camera.FoVy / 2.))
+
+            # transform points to camera space
+            R = torch.tensor(camera.R, device=xyz.device, dtype=torch.float32)
+            T = torch.tensor(camera.T, device=xyz.device, dtype=torch.float32)
+            # R is stored transposed due to 'glm' in CUDA code so we don't neet transopse here
+            xyz_cam = xyz @ R + T[None, :]
+
+            # project to screen space
+            valid_depth = xyz_cam[:, 2] > 0.2  # TODO remove hard coded value
+
+            x, y, z = xyz_cam[:, 0], xyz_cam[:, 1], xyz_cam[:, 2]
+            z = torch.clamp(z, min=0.001)
+
+            x = x / z * focal_x + camera.image_width / 2.0
+            y = y / z * focal_y + camera.image_height / 2.0
+
+            # in_screen = torch.logical_and(torch.logical_and(x >= 0, x < camera.image_width), torch.logical_and(y >= 0, y < camera.image_height))
+
+            # use similar tangent space filtering as in the paper
+            in_screen = torch.logical_and(
+                torch.logical_and(x >= -0.15 * camera.image_width, x <= camera.image_width * 1.15),
+                torch.logical_and(y >= -0.15 * camera.image_height, y <= 1.15 * camera.image_height))
+
+            valid = torch.logical_and(valid_depth, in_screen)
+
+            # distance[valid] = torch.min(distance[valid], xyz_to_cam[valid])
+            distance[valid] = torch.min(distance[valid], z[valid])
+            valid_points = torch.logical_or(valid_points, valid)
+            if focal_length < focal_x:
+                focal_length = focal_x
+
+        distance[~valid_points] = distance[valid_points].max()
+
+        # TODO remove hard coded value
+        # TODO box to gaussian transform
+        filter_3D = distance / focal_length * (0.2 ** 0.5)
+        self.filter_3D = filter_3D[..., None]
+
+    def apply_scaling_n_opacity_with_3D_filter(self, opacity, scales):
+        opacity = self.opacity_activation(opacity)
+        scales = self.scaling_activation(scales)
+        scales_square = torch.square(scales)
+        det1 = scales_square.prod(dim=1)
+        scales_after_square = scales_square + torch.square(self.filter_3D)
+        det2 = scales_after_square.prod(dim=1)
+        coef = torch.sqrt(det1 / det2)
+        scales = torch.sqrt(scales_after_square)
+        return scales, opacity * coef[..., None]
+    ###

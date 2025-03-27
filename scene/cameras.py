@@ -19,7 +19,6 @@ import random
 from torchvision import transforms
 from PIL import Image
 
-
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
@@ -37,6 +36,7 @@ class Camera(nn.Module):
         self.time = timestamp
         self.cam_no = cam_no
         self.frame_no = frame_no
+        self.tongue_mask = None
 
         self.transform = transforms.ToTensor()
         self.gt_alpha_mask = gt_alpha_mask
@@ -127,6 +127,9 @@ class Camera(nn.Module):
         original_image = Image.open(self.image_path)
         original_image = original_image.resize(self.img_wh, Image.LANCZOS)
         self.original_image = self.transform(original_image)
+        tongue_mask = Image.open(self.image_path.replace('images', 'segmentations'))
+        tongue_mask = tongue_mask.resize(self.img_wh, Image.LANCZOS)
+        self.tongue_mask = self.transform(tongue_mask)
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
         if self.gt_alpha_mask is not None:
