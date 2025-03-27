@@ -1,30 +1,19 @@
-#  E-D3DGS : Embedding-Based Deformable 3D Gaussian Splatting (ECCV 2024)
 
-[![arXiv](https://img.shields.io/badge/arXiv-2404.03613-006600)](https://arxiv.org/abs/2404.03613) 
-[![project_page](https://img.shields.io/badge/project_page-68BC71)](https://jeongminb.github.io/e-d3dgs/)
+#  Dynamic Geometry Reconstruction
 
-[Jeongmin Bae](https://jeongminb.github.io/)<sup>1*</sup>, [Seoha Kim](https://seoha-kim.github.io/)<sup>1*</sup>, [Youngsik Yun](https://bbangsik13.github.io/)<sup>1</sup>, </br>
-Hahyun Lee<sup>2 </sup>, Gun Bang<sup>2</sup>, [Youngjung Uh](https://github.com/yj-uh)<sup>1†</sup>
+<img width="1145" alt="overview" src="https://github.com/user-attachments/assets/47715677-539b-455c-893a-832c280a53bd" />
 
-<sup>1</sup>Yonsei University &emsp; <sup>2</sup>Electronics and Telecommunications Research Institute (ETRI)
-<br><sup>\*</sup> Equal Contributions &emsp; <sup>†</sup> Corresponding Author
+https://github.com/user-attachments/assets/0b323c85-d92b-40df-ad87-381b25572ade
 
----
-
-Official repository for <a href="https://arxiv.org/abs/2404.03613">"Per-Gaussian Embedding-Based Deformation for Deformable 3D Gaussian Splatting"</a><be>. <br>
-Our approach employs per-Gaussian latent embeddings to predict deformation for each Gaussian and achieves a clearer representation of dynamic motion.
-
-![Alt Text](https://github.com/JeongminB/E-D3DGS/blob/main/teaser.gif)
-
-## Environmental Setup
+## Environment Setup
 Please follow the [3DGS](https://github.com/graphdeco-inria/gaussian-splatting) to install the relative packages.
 ```bash
-git clone https://github.com/JeongminB/E-D3DGS.git
+git clone git@github.com:buma13/E-D3DGS.git
 cd E-D3DGS
 git submodule update --init --recursive
 
-conda create -n ed3dgs python=3.7 
-conda activate ed3dgs
+conda create -n dynamic python=3.7 
+conda activate dynamic
 
 pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
 
@@ -42,11 +31,14 @@ pip install -e submodules/simple-knn/
 ## Data Preparation
 
 **Downloading Datasets:**  
-Please download datasets from their official websites : [HyperNerf](https://github.com/google/hypernerf/releases/tag/v0.1), [Neural 3D Video](https://github.com/facebookresearch/Neural_3D_Video) and [Technicolor](https://www.interdigital.com/data_sets/light-field-dataset) <br><br>
-- Please remove 'cam13.mp4' and corresponding pose from <i>coffee_martini</i> scene in the Neural 3D Video dataset. <br>
-- We split the entire <i>flame_salmon_1_split</i> scene into four 300-frame scenes.
+Please download dataset from its official website: [NeRSemble](https://tobias-kirschstein.github.io/nersemble/)
 
-<br>
+
+
+**Preparing dataset for E-D3DGS data loader:**
+``` bash
+python scripts/prepare_nersemble_4_ed3dgs.py $RAW_GT_PATH/$PERSON $SCENE $PROCESSED_GT_PATH --alpha_mask --number_of_frames $SIZE
+```
 
 **Extracting point clouds from COLMAP:** 
 ```bash
@@ -55,21 +47,18 @@ bash script/colmap_setup.sh
 conda activate colmapenv 
 
 # automatically extract the frames and reorginize them
-python script/pre_n3v.py --videopath <dataset>/<scene>
-python script/pre_technicolor.py --videopath <dataset>/<scene>
-python script/pre_hypernerf.py --videopath <dataset>/<scene>
+python script/pre_nersemble.py --videopath $PROCESSED_GT_PATH
 
 # downsample dense point clouds
-python script/downsample_point.py \
-<location>/<scene>/colmap/dense/workspace/fused.ply <location>/<scene>/points3D_downsample.ply
+python script/downsample_point.py $PROCESSED_GT_PATH/colmap/dense/workspace/fused.ply $PROCESSED_GT_PATH/points3D_downsample.ply
 ```
 
 
 After running COLMAP, Neural 3D Video and Technicolor datasets are orginized as follows:
 ```
 ├── data
-│   | n3v
-│     ├── cook_spinach
+│   | nersemble
+│     ├── TONGUE
 │       ├── colmap
 │       ├── images
 │           ├── cam01
@@ -80,20 +69,25 @@ After running COLMAP, Neural 3D Video and Technicolor datasets are orginized as 
 │               ├── 0000.png
 │               ├── 0001.png
 │               ├── ...
-│     ├── cut_roasted_beef
+│     ├── HAIR
 |     ├── ...
-```
+``` 
+
+**Script to help with adding tongue specific points to the point cloud:**
+``` bash
+# Renders point cloud with added tongue points and saves it to new file.
+python scripts/add_tongue_points.py $PROCESSED_GT_PATH/points3D_downsample.ply
+``` 
 
 ## Training
 
 To resize the training image, modify `-r 2` in the command line.
 ``` bash
 # Train
-python train.py -s $GT_PATH/$SCENE --configs arguments/$DATASET/$CONFIG.py --model_path $OUTPUT_PATH --expname $DATASET/$SCENE -r 2
+python train.py -s $PROCESSED_GT_PATH/$SCENE --configs arguments/$DATASET/$CONFIG.py --model_path $OUTPUT_PATH --expname $EXPERIMENT -r 2
 ``` 
 
 ## Rendering
-
 
 ``` bash
 # Render test view only
@@ -103,29 +97,23 @@ python render.py --model_path $OUTPUT_PATH --configs arguments/$DATASET/$CONFIG.
 python render.py --model_path $OUTPUT_PATH --configs arguments/$DATASET/$CONFIG.py
 ```
 
-## Evaluation
-Note: In our paper, we calculate FPS by measuring rendering time only (except for save_image, etc.).
+## Mesh Extraction
+
 ``` bash
-# Evaluate
-python metrics.py --model_path $SAVE_PATH/$DATASET/$CONFIG
+python mesh_extract_tetrahedra.py -s $PROCESSED_GT_PATH/$SCENE -m $OUTPUT_PATH -r 2 --configs arguments/$DATASET/$CONFIG.py --start_timestep_index $START_INDEX --end_timestep_index $STOP_INDEX
 ```
 
-## Note
+## Evaluation
 
-* We provide scripts that collectively perform training, rendering, and evaluation. See the `train_<dataset_name>.sh`. 
-* You will need to configure the dataset path according to your system.
-* In the config file, make sure that the `total_num_frames` and `maxtime` are equal to the total number of training frames.
+``` bash
+# Evaluate rendering metrics
+python metrics.py --model_path $SAVE_PATH/$DATASET/$CONFIG
+
+# Evaluate mesh metrics
+python evaluate_pointcloud_mesh.py --meshes_path $OUTPUT_PATH/tetrahedra_meshes/ours_80000/ --scene_path $PROCESSED_GT_PATH/$SCENE --start_timestep_index $START_INDEX --end_timestep_index $STOP_INDEX
+```
 
 ## Acknowledgements
 
-This code is based on [3DGS](https://github.com/graphdeco-inria/gaussian-splatting), [4DGaussians](https://github.com/hustvl/4DGaussians) and [STG](https://github.com/oppo-us-research/SpacetimeGaussians). In particular, we used [4DGaussians](https://github.com/hustvl/4DGaussians) as a starting point for our study. We would like to thank the authors of these papers for their hard work. 😊
+This code is based on [E-D3DGS](https://github.com/JeongminB/E-D3DGS) and [RaDe-GS](https://github.com/BaowenZ/RaDe-GS). We would like to thank the authors of these papers for their hard work. 😊
 
-## BibTex
-```
-@inproceedings{bae2024ed3dgs,
-    title={Per-Gaussian Embedding-Based Deformation for Deformable 3D Gaussian Splatting}, 
-    author={Bae, Jeongmin and Kim, Seoha and Yun, Youngsik and Lee, Hahyun and Bang, Gun and Uh, Youngjung}, 
-    booktitle = {European Conference on Computer Vision (ECCV)},
-    year={2024}
-}
-```
