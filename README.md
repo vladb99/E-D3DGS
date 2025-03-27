@@ -37,7 +37,7 @@ Please download dataset from its official website: [NeRSemble](https://tobias-ki
 
 **Preparing dataset for E-D3DGS data loader:**
 ``` bash
-python scripts/prepare_nersemble_4_ed3dgs.py $RAW_GT_PATH/$PERSON $SCENE $PROCESSED_GT_PATH --alpha_mask --number_of_frames $SIZE
+python nersemble_scripts/prepare_nersemble_4_ed3dgs.py $RAW_GT_PATH/$PERSON $SCENE $PROCESSED_GT_PATH --alpha_mask --number_of_frames $SIZE
 ```
 
 **Extracting point clouds from COLMAP:** 
@@ -76,7 +76,7 @@ After running COLMAP, Neural 3D Video and Technicolor datasets are orginized as 
 **Script to help with adding tongue specific points to the point cloud:**
 ``` bash
 # Renders point cloud with added tongue points and saves it to new file.
-python scripts/add_tongue_points.py $PROCESSED_GT_PATH/points3D_downsample.ply
+python nersemble_scripts/add_tongue_points.py $PROCESSED_GT_PATH/points3D_downsample.ply
 ``` 
 
 ## Training
