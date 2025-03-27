@@ -7,6 +7,7 @@ import os
 import re
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 def apply_distance_colormap(values, distance_color_map_path):
     # Create a colormap object (RdYlGn)
@@ -26,22 +27,22 @@ def apply_distance_colormap(values, distance_color_map_path):
     # Generate RGB colors based on the colormap
     rgb_colors = [cmap(norm(val))[:3] for val in values]  # Extract RGB values (ignore alpha channel)
 
-    # Create a plot
-    fig, ax = plt.subplots(figsize=(2, 6))
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-
-    # Add colorbar with labels in millimeters
-    cbar = plt.colorbar(sm, ax=ax, extend='max')
-    cbar.set_label("Value (mm)")
-    cbar.set_ticks([min_distance, max_distance])
-
-    # Set the ticks to correspond to min and max values
-    cbar.set_ticklabels([f'{min_distance:.2f} mm', f'{max_distance:.2f} mm'])
-
-    ax.set_title("Distance to mesh error")
-    ax.axis('off')
-    plt.savefig(distance_color_map_path, bbox_inches='tight')
+    # # Create a plot
+    # fig, ax = plt.subplots(figsize=(2, 6))
+    # sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    # sm.set_array([])
+    #
+    # # Add colorbar with labels in millimeters
+    # cbar = plt.colorbar(sm, ax=ax, extend='max')
+    # cbar.set_label("Value (mm)")
+    # cbar.set_ticks([min_distance, max_distance])
+    #
+    # # Set the ticks to correspond to min and max values
+    # cbar.set_ticklabels([f'{min_distance:.2f} mm', f'{max_distance:.2f} mm'])
+    #
+    # ax.set_title("Distance to mesh error")
+    # ax.axis('off')
+    # plt.savefig(distance_color_map_path, bbox_inches='tight')
 
     return np.asarray(rgb_colors)
 
@@ -62,23 +63,46 @@ def apply_similarity_colormap(values, similarity_color_map_path):
     # Generate RGB colors based on the colormap
     rgb_colors = [cmap(norm(val))[:3] for val in values]  # Extract RGB values (ignore alpha channel)
 
-    # Create a plot
-    fig, ax = plt.subplots(figsize=(2, 6))
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-
-    # Add colorbar with labels in millimeters
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_ticks([min_similarity, max_similarity])
-
-    # Set the ticks to correspond to min and max values
-    cbar.set_ticklabels([min_similarity, max_similarity])
-
-    ax.set_title("Similarity to normal error")
-    ax.axis('off')
-    plt.savefig(similarity_color_map_path, bbox_inches='tight')
+    # # Create a plot
+    # fig, ax = plt.subplots(figsize=(2, 6))
+    # sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    # sm.set_array([])
+    #
+    # # Add colorbar with labels in millimeters
+    # cbar = plt.colorbar(sm, ax=ax)
+    # cbar.set_ticks([min_similarity, max_similarity])
+    #
+    # # Set the ticks to correspond to min and max values
+    # cbar.set_ticklabels([min_similarity, max_similarity])
+    #
+    # ax.set_title("Similarity to normal error")
+    # ax.axis('off')
+    # plt.savefig(similarity_color_map_path, bbox_inches='tight')
 
     return np.asarray(rgb_colors)
+
+def process_timestep(index, args, sorted_timestep_dirs):
+    """ Function to process a single timestep """
+    pcd_path = os.path.join(args.scene_path, "timesteps", sorted_timestep_dirs[index], "colmap", "pointclouds", "pointcloud_16.pcd")
+    pcd_distance_2_mesh_path = os.path.join(args.meshes_path, f"timestep_{index}", "pointcloud_distance_2_mesh_colored.ply")
+    distance_color_map_path = os.path.join(args.meshes_path, f"timestep_{index}", "distance_color_map.png")
+    similarity_color_map_path = os.path.join(args.meshes_path, f"timestep_{index}", "similarity_color_map.png")
+    pcd_similarity_2_normal_path = os.path.join(args.meshes_path, f"timestep_{index}", "pointcloud_similarity_2_normal_colored.ply")
+    mesh_path = os.path.join(args.meshes_path, f"timestep_{index}", "recon.ply")
+
+    # Compute distances and similarities
+    dists, similarities, pcd_vertices = compute_metrics(path_to_mesh=mesh_path, path_to_point_cloud=pcd_path)
+    avg_dist = dists.mean()
+    avg_similarity = similarities.mean()
+
+    # Apply color maps
+    dist_colors = apply_distance_colormap(dists, distance_color_map_path)
+    pcu.save_mesh_vc(pcd_distance_2_mesh_path, pcd_vertices, dist_colors)
+
+    similarity_colors = apply_similarity_colormap(similarities, similarity_color_map_path)
+    pcu.save_mesh_vc(pcd_similarity_2_normal_path, pcd_vertices, similarity_colors)
+
+    return avg_dist, avg_similarity
 
 def compute_metrics(path_to_mesh, path_to_point_cloud):
     mesh_vertices, mesh_faces = pcu.load_mesh_vf(path_to_mesh)
@@ -126,25 +150,16 @@ if __name__ == "__main__":
     avg_dists = []
     avg_similarities = []
 
-    for index in tqdm(range(args.start_timestep_index, args.end_timestep_index + 1)):
-        pcd_path = os.path.join(args.scene_path, "timesteps", sorted_timestep_dirs[index], "colmap", "pointclouds", "pointcloud_16.pcd")
-        pcd_distance_2_mesh_path = os.path.join(args.meshes_path, "timestep_{}".format(index), "pointcloud_distance_2_mesh_colored.ply")
-        distance_color_map_path = os.path.join(args.meshes_path, "timestep_{}".format(index), "distance_color_map.png")
-        similarity_color_map_path = os.path.join(args.meshes_path, "timestep_{}".format(index), "similarity_color_map.png")
-        pcd_similarity_2_normal_path = os.path.join(args.meshes_path, "timestep_{}".format(index), "pointcloud_similarity_2_normal_colored.ply")
-        mesh_path = os.path.join(args.meshes_path, "timestep_{}".format(index), "recon.ply")
-        dists, similarities, pcd_vertices = compute_metrics(path_to_mesh=mesh_path, path_to_point_cloud=pcd_path)
-        avg_dist = dists.mean()
-        avg_similarity = similarities.mean()
-        avg_dists.append(avg_dist)
-        avg_similarities.append(avg_similarity)
+    with ProcessPoolExecutor() as executor:
+        futures = {
+            executor.submit(process_timestep, index, args, sorted_timestep_dirs): index
+            for index in range(args.start_timestep_index, args.end_timestep_index + 1)
+        }
 
-        dist_colors = apply_distance_colormap(dists, distance_color_map_path)
-        pcu.save_mesh_vc(pcd_distance_2_mesh_path, pcd_vertices, dist_colors)
-
-        similarity_colors = apply_similarity_colormap(similarities, similarity_color_map_path)
-        pcu.save_mesh_vc(pcd_similarity_2_normal_path, pcd_vertices, similarity_colors)
-
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            avg_dist, avg_similarity = future.result()
+            avg_dists.append(avg_dist)
+            avg_similarities.append(avg_similarity)
 
     avg_dists = np.asarray(avg_dists)
     avg_similarities = np.asarray(avg_similarities)
